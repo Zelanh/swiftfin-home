@@ -20,6 +20,9 @@ jobs:
           sudo xcodebuild -license accept
           xcodebuild -runFirstLaunch || true
 
+      - name: Download iOS platform
+        run: xcodebuild -downloadPlatform iOS
+
       - name: Install Carthage
         run: brew install carthage
 
