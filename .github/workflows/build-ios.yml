@@ -14,9 +14,10 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Select Xcode 16
+      - name: Prepare Xcode
         run: |
           sudo xcode-select -s /Applications/Xcode_16.2.app
+          sudo xcodebuild -license accept
           xcodebuild -runFirstLaunch || true
 
       - name: Install Carthage
@@ -42,7 +43,7 @@ jobs:
           xcodebuild build \
             -project Swiftfin.xcodeproj \
             -scheme Swiftfin \
-            -sdk iphoneos \
+            -destination "generic/platform=iOS" \
             -configuration Release \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
