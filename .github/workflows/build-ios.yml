@@ -1,7 +1,5 @@
 name: Build Swiftfin iOS (Chromecast)
 
-# Lanzar manualmente desde la pestaña Actions en GitHub,
-# o automáticamente en cada push a main.
 on:
   workflow_dispatch:
   push:
@@ -10,77 +8,59 @@ on:
 jobs:
   build:
     name: Build IPA
-    runs-on: macos-14          # Apple Silicon runner, Xcode 15 incluido, GRATIS
+    runs-on: macos-15
 
     steps:
-      # ── 1. Descargar el código ─────────────────────────────────────────────
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # ── 2. Seleccionar versión de Xcode ────────────────────────────────────
       - name: Select Xcode 15
-        run: sudo xcode-select -s /Applications/Xcode_15.4.app
+        run: sudo xcode-select -s /Applications/Xcode_16.2.app
 
-      # ── 3. Instalar Carthage ───────────────────────────────────────────────
       - name: Install Carthage
         run: brew install carthage
 
-      # ── 4. Caché de Carthage (evita re-descargar en cada build) ───────────
       - name: Cache Carthage builds
         uses: actions/cache@v4
         with:
-          path: Swiftfin-main/Swiftfin-main/Carthage
-          key: ${{ runner.os }}-carthage-${{ hashFiles('Swiftfin-main/Swiftfin-main/Cartfile.resolved') }}
+          path: Carthage
+          key: ${{ runner.os }}-carthage-${{ hashFiles('Cartfile.resolved') }}
           restore-keys: |
             ${{ runner.os }}-carthage-
 
-      # ── 5. Descargar GoogleCast SDK + VLCKit ──────────────────────────────
-      - name: Bootstrap Carthage dependencies
-        working-directory: Swiftfin-main/Swiftfin-main
+      - name: Bootstrap Carthage (GoogleCast + VLC)
         run: |
           carthage bootstrap \
             --use-xcframeworks \
             --platform iOS \
             --cache-builds
 
-      # ── 6. Compilar la app (sin firma — Sideloadly/AltStore firmará) ───────
       - name: Build unsigned .app
-        working-directory: Swiftfin-main/Swiftfin-main
         run: |
           xcodebuild build \
             -project Swiftfin.xcodeproj \
-            -scheme "Swiftfin (iOS)" \
+            -scheme Swiftfin \
             -sdk iphoneos \
             -destination "generic/platform=iOS" \
             -configuration Release \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGN_IDENTITY="" \
-            PROVISIONING_PROFILE="" \
-            CONFIGURATION_BUILD_DIR="$PWD/build/Release-iphoneos" \
-            | xcpretty
+            SYMROOT="$RUNNER_TEMP/build"
 
-      # ── 7. Empaquetar como .ipa ────────────────────────────────────────────
       - name: Package as IPA
-        working-directory: Swiftfin-main/Swiftfin-main
         run: |
-          mkdir -p output/Payload
-          cp -r build/Release-iphoneos/Swiftfin.app output/Payload/
-          cd output
-          zip -r ../Swiftfin-Chromecast.ipa Payload/
-          echo "IPA creado correctamente ✅"
+          APP_PATH=$(find "$RUNNER_TEMP/build" -name "*.app" ! -name "*.xctest" | head -1)
+          echo "App encontrada en: $APP_PATH"
+          mkdir -p "$RUNNER_TEMP/Payload"
+          cp -r "$APP_PATH" "$RUNNER_TEMP/Payload/"
+          cd "$RUNNER_TEMP"
+          zip -r Swiftfin-Chromecast.ipa Payload/
+          echo "IPA creado ✅"
 
-      # ── 8. Subir el .ipa como artifact (disponible 14 días) ───────────────
-      - name: Upload IPA artifact
+      - name: Upload IPA
         uses: actions/upload-artifact@v4
         with:
           name: Swiftfin-Chromecast-${{ github.run_number }}
-          path: Swiftfin-main/Swiftfin-main/Swiftfin-Chromecast.ipa
+          path: ${{ runner.temp }}/Swiftfin-Chromecast.ipa
           retention-days: 14
-
-      # ── 9. (Opcional) Mostrar tamaño del IPA en el log ────────────────────
-      - name: Show IPA info
-        working-directory: Swiftfin-main/Swiftfin-main
-        run: |
-          ls -lh Swiftfin-Chromecast.ipa
-          echo "✅ Build completa. Descarga el .ipa desde la pestaña Actions → este run → Artifacts"
