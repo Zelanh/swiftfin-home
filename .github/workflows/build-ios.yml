@@ -19,9 +19,10 @@ jobs:
           sudo xcode-select -s /Applications/Xcode_16.2.app
           sudo xcodebuild -license accept
           xcodebuild -runFirstLaunch || true
+          defaults write com.apple.dt.Xcode DVTSkipConcurrentDestinationValidation -bool YES
 
-      - name: Download iOS platform
-        run: xcodebuild -downloadPlatform iOS
+      - name: Show available SDKs
+        run: xcodebuild -showsdks
 
       - name: Install Carthage
         run: brew install carthage
@@ -46,8 +47,10 @@ jobs:
           xcodebuild build \
             -project Swiftfin.xcodeproj \
             -scheme Swiftfin \
-            -destination "generic/platform=iOS" \
+            -sdk iphoneos \
+            -arch arm64 \
             -configuration Release \
+            ONLY_ACTIVE_ARCH=NO \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGN_IDENTITY="" \
