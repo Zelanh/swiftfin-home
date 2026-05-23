@@ -1,0 +1,109 @@
+//
+// Swiftfin is subject to the terms of the Mozilla Public
+// License, v2.0. If a copy of the MPL was not distributed with this
+// file, you can obtain one at https://mozilla.org/MPL/2.0/.
+//
+// Copyright (c) 2026 Jellyfin & Jellyfin Contributors
+//
+
+import Defaults
+import JellyfinAPI
+import SwiftUI
+
+struct ServerUserDeviceAccessView: View {
+
+    @CurrentDate
+    private var currentDate: Date
+
+    @Router
+    private var router
+
+    @State
+    private var tempPolicy: UserPolicy
+
+    @StateObject
+    private var viewModel: ServerUserAdminViewModel
+    @StateObject
+    private var devicesViewModel = DevicesViewModel()
+
+    init(viewModel: ServerUserAdminViewModel) {
+        self._viewModel = StateObject(wrappedValue: viewModel)
+
+        guard let policy = viewModel.user.policy else {
+            preconditionFailure("User policy cannot be empty.")
+        }
+
+        self.tempPolicy = policy
+    }
+
+    var body: some View {
+        contentView
+            .backport
+            .toolbarTitleDisplayMode(.inline)
+            .navigationTitle(L10n.deviceAccess.localizedCapitalized)
+            .navigationBarCloseButton {
+                router.dismiss()
+            }
+            .topBarTrailing {
+                if viewModel.background.is(.updating) {
+                    ProgressView()
+                }
+                Button(L10n.save) {
+                    if tempPolicy != viewModel.user.policy {
+                        viewModel.updatePolicy(tempPolicy)
+                    }
+                }
+                .buttonStyle(.toolbarPill)
+                .disabled(viewModel.user.policy == tempPolicy)
+            }
+            .onReceive(viewModel.events) { event in
+                switch event {
+                case .updated:
+                    UIDevice.feedback(.success)
+                    router.dismiss()
+                }
+            }
+            .onFirstAppear {
+                devicesViewModel.refresh()
+            }
+            .refreshable {
+                viewModel.refresh()
+            }
+            .errorMessage($viewModel.error)
+    }
+
+    @ViewBuilder
+    private var contentView: some View {
+        List {
+            InsetGroupedListHeader {
+                Toggle(
+                    L10n.enableAllDevices,
+                    isOn: $tempPolicy.enableAllDevices.coalesce(false)
+                )
+            }
+            .listRowBackground(Color.clear)
+            .listRowSeparator(.hidden)
+            .padding(.vertical, 24)
+
+            if tempPolicy.enableAllDevices == false {
+                Section {
+                    ForEach(devicesViewModel.devices, id: \.self) { device in
+                        DevicesView.DeviceRow(device: device) {
+                            if let index = tempPolicy.enabledDevices?.firstIndex(of: device.id!) {
+                                tempPolicy.enabledDevices?.remove(at: index)
+                            } else {
+                                if tempPolicy.enabledDevices == nil {
+                                    tempPolicy.enabledDevices = []
+                                }
+                                tempPolicy.enabledDevices?.append(device.id!)
+                            }
+                        }
+                        .isEditing(true)
+                        .isSelected(tempPolicy.enabledDevices?.contains(device.id ?? "") == true)
+                    }
+                }
+            }
+        }
+        .listStyle(.plain)
+    }
+}

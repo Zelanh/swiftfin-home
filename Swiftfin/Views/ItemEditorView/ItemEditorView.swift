@@ -1,0 +1,120 @@
+//
+// Swiftfin is subject to the terms of the Mozilla Public
+// License, v2.0. If a copy of the MPL was not distributed with this
+// file, you can obtain one at https://mozilla.org/MPL/2.0/.
+//
+// Copyright (c) 2026 Jellyfin & Jellyfin Contributors
+//
+
+import Engine
+import Factory
+import JellyfinAPI
+import SwiftUI
+
+struct ItemEditorView: View {
+
+    @ObservedObject
+    var viewModel: ItemEditorViewModel<BaseItemDto>
+
+    @Router
+    private var router
+
+    var body: some View {
+        ZStack {
+            switch viewModel.state {
+            case .initial:
+                contentView
+            case .error:
+                viewModel.error.map {
+                    ErrorView(error: $0)
+                }
+            }
+        }
+        .navigationTitle(L10n.metadata)
+        .navigationBarTitleDisplayMode(.inline)
+        .navigationBarCloseButton {
+            router.dismiss()
+        }
+        .onFirstAppear {
+            // Ensure we have a full `BaseItemDto` or some non-required metadata may be missing
+            viewModel.refreshItem(sendNotification: false)
+        }
+        .refreshable {
+            viewModel.refreshItem(sendNotification: false)
+        }
+        .onNotification(.didDeleteItem) { _ in
+            UIDevice.feedback(.success)
+            router.dismiss()
+        }
+        .errorMessage($viewModel.error)
+    }
+
+    private var contentView: some View {
+        List {
+            ListTitleSection(
+                viewModel.item.name ?? L10n.unknown,
+                description: viewModel.item.path
+            )
+
+            Section(L10n.edit) {
+                if let itemKind = viewModel.item.type,
+                   BaseItemKind.itemIdentifiableCases.contains(itemKind)
+                {
+                    ChevronButton(L10n.identify) {
+                        router.route(to: .identifyItem(item: viewModel.item))
+                    }
+                }
+
+                ChevronButton(L10n.images) {
+                    router.route(to: .itemImages(viewModel: ItemImageViewModel(item: viewModel.item)))
+                }
+
+                ChevronButton(L10n.metadata) {
+                    router.route(to: .editMetadata(viewModel: viewModel))
+                }
+            }
+
+            if viewModel.item.hasComponents {
+                Section {
+                    ChevronButton(L10n.genres) {
+                        router.route(to: .editGenres(item: viewModel.item))
+                    }
+
+                    ChevronButton(L10n.people) {
+                        router.route(to: .editPeople(item: viewModel.item))
+                    }
+
+                    ChevronButton(L10n.tags) {
+                        router.route(to: .editTags(item: viewModel.item))
+                    }
+
+                    ChevronButton(L10n.studios) {
+                        router.route(to: .editStudios(item: viewModel.item))
+                    }
+                }
+            }
+
+            if viewModel.item.canDelete == true {
+                StateAdapter(initialValue: false) { isPresentingDeleteConfirmation in
+                    Button(L10n.delete, role: .destructive) {
+                        isPresentingDeleteConfirmation.wrappedValue = true
+                    }
+                    .buttonStyle(.primary)
+                    .confirmationDialog(
+                        L10n.deleteItemConfirmationMessage,
+                        isPresented: isPresentingDeleteConfirmation,
+                        titleVisibility: .visible
+                    ) {
+                        Button(
+                            L10n.confirm,
+                            role: .destructive,
+                            action: viewModel.delete
+                        )
+
+                        Button(L10n.cancel, role: .cancel) {}
+                    }
+                }
+            }
+        }
+    }
+}
