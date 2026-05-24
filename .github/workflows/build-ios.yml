@@ -19,10 +19,21 @@ jobs:
           sudo xcode-select -s /Applications/Xcode_16.2.app
           sudo xcodebuild -license accept
           xcodebuild -runFirstLaunch || true
-          defaults write com.apple.dt.Xcode DVTSkipConcurrentDestinationValidation -bool YES
 
-      - name: Show available SDKs
-        run: xcodebuild -showsdks
+      - name: Install iOS runtime
+        run: |
+          xcrun simctl runtime add "iOS 18.2" || true
+          xcrun simctl list runtimes
+
+      - name: Show available destinations
+        run: |
+          echo "=== SDKs disponibles ==="
+          xcodebuild -showsdks
+          echo ""
+          echo "=== Destinos para el scheme Swiftfin ==="
+          xcodebuild -showdestinations \
+            -project Swiftfin.xcodeproj \
+            -scheme Swiftfin 2>&1 | head -50 || true
 
       - name: Install Carthage
         run: brew install carthage
@@ -47,10 +58,8 @@ jobs:
           xcodebuild build \
             -project Swiftfin.xcodeproj \
             -scheme Swiftfin \
-            -sdk iphoneos \
-            -arch arm64 \
+            -destination "generic/platform=iOS" \
             -configuration Release \
-            ONLY_ACTIVE_ARCH=NO \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGN_IDENTITY="" \
