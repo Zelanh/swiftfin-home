@@ -46,6 +46,12 @@ jobs:
             --platform iOS \
             --cache-builds
 
+      - name: Trust Swift macros (required for headless CI in Xcode 15.3+)
+        run: |
+          # Xcode 15.3+ requires interactive approval of Swift macros from SPM packages.
+          # In CI there is no GUI, so we disable fingerprint validation via user defaults.
+          defaults write com.apple.dt.Xcode IDESkipMacroFingerprintValidation -bool YES
+
       - name: Build unsigned .app
         run: |
           xcodebuild build \
