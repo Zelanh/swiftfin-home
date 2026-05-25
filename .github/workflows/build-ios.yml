@@ -16,17 +16,17 @@ jobs:
 
       - name: Xcode setup
         run: |
-          # Do NOT override xcode-select — use whatever the runner pre-configured.
-          # The runner only installs the iOS platform for its default Xcode version;
-          # forcing a different Xcode breaks the platform lookup.
+          # Use the runner's default Xcode — it has the iOS platform pre-configured.
           sudo xcodebuild -license accept
           sudo xcodebuild -runFirstLaunch || true
           echo "=== Xcode in use ==="
           xcodebuild -version
           echo "=== iOS SDKs available ==="
           xcodebuild -showsdks 2>&1 | grep -i iphone
-          echo "=== Platforms directory ==="
-          ls "$(xcode-select -p)/Platforms/"
+
+      - name: Trust Swift macros (required for headless CI in Xcode 15.3+)
+        run: |
+          defaults write com.apple.dt.Xcode IDESkipMacroFingerprintValidation -bool YES
 
       - name: Install Carthage
         run: brew install carthage
@@ -46,11 +46,25 @@ jobs:
             --platform iOS \
             --cache-builds
 
-      - name: Trust Swift macros (required for headless CI in Xcode 15.3+)
+      - name: Resolve SPM packages
         run: |
-          # Xcode 15.3+ requires interactive approval of Swift macros from SPM packages.
-          # In CI there is no GUI, so we disable fingerprint validation via user defaults.
-          defaults write com.apple.dt.Xcode IDESkipMacroFingerprintValidation -bool YES
+          # Resolve into a fixed derived-data path so we can patch packages before compiling.
+          xcodebuild -resolvePackageDependencies \
+            -project Swiftfin.xcodeproj \
+            -scheme Swiftfin \
+            -derivedDataPath "$RUNNER_TEMP/derived_data"
+
+      - name: Patch Nuke for Xcode 16.4 / Swift 6 compatibility
+        run: |
+          # Nuke 13.0.2 uses 'isolated deinit' (Swift 5.10 experimental feature).
+          # The Swift 6 compiler ships with Xcode 16.4 neither accepts the
+          # -enable-experimental-feature flag (feature graduated to production)
+          # nor allows the syntax in Swift 5 language mode.
+          # Replacing with plain 'deinit' is functionally equivalent for our build.
+          find "$RUNNER_TEMP/derived_data" \
+            -path "*/checkouts/Nuke/Sources/Nuke/**/*.swift" \
+            -exec sed -i '' 's/isolated deinit/deinit/g' {} \;
+          echo "Nuke patched ✅"
 
       - name: Build unsigned .app
         run: |
@@ -60,12 +74,12 @@ jobs:
             -sdk iphoneos \
             -destination "generic/platform=iOS" \
             -configuration Release \
+            -derivedDataPath "$RUNNER_TEMP/derived_data" \
             ARCHS=arm64 \
             ONLY_ACTIVE_ARCH=NO \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGN_IDENTITY="" \
-            'OTHER_SWIFT_FLAGS=$(inherited) -enable-experimental-feature IsolatedDeinit' \
             SYMROOT="$RUNNER_TEMP/build"
 
       - name: Package as IPA
