@@ -76,6 +76,7 @@ jobs:
           # Step 2: isolated deinit   → deinit  (catch any remaining actor-isolated deinit)
           # NOTE: step 1 MUST run first so step 2 cannot re-match leftover 'isolated deinit'
           #       inside words like 'nonisolated'.
+          #Hacemos un test rapido
           find "$NUKE_DIR" -name "*.swift" \
             -exec sed -i '' 's/nonisolated deinit/deinit/g' {} \;
           find "$NUKE_DIR" -name "*.swift" \
