@@ -88,6 +88,30 @@ jobs:
             && echo "⚠️  isolated deinit still present — check pattern" \
             || echo "✅ Patch clean — no isolated deinit remaining"
 
+      - name: Patch Pulse for Xcode 16.4 / iOS 26 API compatibility
+        run: |
+          PULSE_FILE="$RUNNER_TEMP/derived_data/SourcePackages/checkouts/Pulse/Sources/PulseUI/Extensions/SwiftUI+Extensions.swift"
+          echo "=== Patching Pulse SwiftUI+Extensions.swift ==="
+
+          # Pulse 5.2.0 added a BackportButtonRole enum with .close and .confirm cases
+          # that map to SwiftUI ButtonRole.close / ButtonRole.confirm (iOS 26+ only).
+          # Building with Xcode 16.4 / iOS 18.5 SDK those members don't exist yet.
+          # Map them to .cancel (available since iOS 15) so the init compiles.
+          sed -i '' 's/case \.close: self = \.close/case .close: self = .cancel/g' "$PULSE_FILE"
+          sed -i '' 's/case \.confirm: self = \.confirm/case .confirm: self = .cancel/g' "$PULSE_FILE"
+
+          # Pulse 5.2.0 also calls Button(role:action:) without a label inside an
+          # #available(iOS 26,...) block. That init doesn't exist in the iOS 18.5 SDK.
+          # Replace with Button(role:action:label:) passing EmptyView, which compiles
+          # on iOS 15+ and is functionally equivalent (the button label is provided
+          # by the caller's ViewBuilder in all real uses of this helper).
+          sed -i '' 's/Button(role: ButtonRole(role), action: action)/Button(role: ButtonRole(role), action: action, label: { EmptyView() })/g' "$PULSE_FILE"
+
+          echo "=== Verifying Pulse patch ==="
+          grep -n "self = \.close\|self = \.confirm" "$PULSE_FILE" \
+            && echo "⚠️  unmapped ButtonRole case still present" \
+            || echo "✅ ButtonRole cases patched"
+
       - name: Build unsigned .app
         run: |
           xcodebuild build \
