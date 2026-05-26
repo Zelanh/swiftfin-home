@@ -98,6 +98,12 @@ jobs:
 
       - name: Build unsigned .app
         run: |
+          # SWIFT_ENABLE_EXPLICIT_MODULES=NO: Xcode 26 enables explicit module builds
+          # by default, which requires every package to declare its full transitive
+          # dependency graph. swift-case-paths 1.7.3 has incomplete declarations
+          # (CasePathsMacros is missing deps on SwiftSyntax, SwiftCompilerPlugin, etc.)
+          # causing "Unable to find module dependency: CasePaths". Disabling explicit
+          # modules reverts to the implicit approach that resolves this correctly.
           xcodebuild build \
             -project Swiftfin.xcodeproj \
             -scheme Swiftfin \
@@ -109,7 +115,8 @@ jobs:
             ONLY_ACTIVE_ARCH=NO \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
-            CODE_SIGN_IDENTITY=""
+            CODE_SIGN_IDENTITY="" \
+            SWIFT_ENABLE_EXPLICIT_MODULES=NO
 
       - name: Package as IPA
         run: |
