@@ -98,13 +98,15 @@ jobs:
 
       - name: Build unsigned .app
         run: |
-          # SWIFT_ENABLE_EXPLICIT_MODULES=NO: Xcode 26 enables explicit module builds
-          # by default, which requires every package to declare its full transitive
-          # dependency graph. swift-case-paths 1.7.3 has incomplete declarations
-          # (CasePathsMacros is missing deps on SwiftSyntax, SwiftCompilerPlugin, etc.)
-          # causing "Unable to find module dependency: CasePaths". Disabling explicit
-          # modules reverts to the implicit approach that resolves this correctly.
+          # -skipMacroValidation is the SAME flag the upstream Swiftfin Fastfile
+          # passes via `xcargs: "-skipMacroValidation"` in its buildLane. Without
+          # it, Xcode's macro validation interferes with the SPM build graph for
+          # packages whose products mix a library target with a macro plugin
+          # (CasePaths → library + CasePathsMacros plugin), causing the iOS
+          # CasePaths.swiftmodule to never be built before StatefulMacros tries
+          # to import it. This flag fixes that.
           xcodebuild build \
+            -skipMacroValidation \
             -project Swiftfin.xcodeproj \
             -scheme Swiftfin \
             -sdk iphoneos \
@@ -115,8 +117,7 @@ jobs:
             ONLY_ACTIVE_ARCH=NO \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
-            CODE_SIGN_IDENTITY="" \
-            SWIFT_ENABLE_EXPLICIT_MODULES=NO
+            CODE_SIGN_IDENTITY=""
 
       - name: Package as IPA
         run: |
