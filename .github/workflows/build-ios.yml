@@ -62,15 +62,29 @@ jobs:
 
       - name: Patch Nuke for Xcode 16.4 / Swift 6 compatibility
         run: |
-          # Nuke 13.0.2 uses 'isolated deinit' (Swift 5.10 experimental feature).
-          # The Swift 6 compiler ships with Xcode 16.4 neither accepts the
-          # -enable-experimental-feature flag (feature graduated to production)
-          # nor allows the syntax in Swift 5 language mode.
-          # Replacing with plain 'deinit' is functionally equivalent for our build.
-          find "$RUNNER_TEMP/derived_data" \
-            -path "*/checkouts/Nuke/Sources/Nuke/**/*.swift" \
+          NUKE_DIR="$RUNNER_TEMP/derived_data/SourcePackages/checkouts/Nuke"
+          echo "=== Nuke source dir ==="
+          ls "$NUKE_DIR/Sources/Nuke/Pipeline/" || echo "Nuke dir not found at expected path"
+
+          # Nuke 13.0.2 uses 'nonisolated deinit' (Swift 5.10 actor feature).
+          # In Swift 5 mode under Xcode 16.4's Swift 6 compiler, this syntax is
+          # rejected because the IsolatedDeinit feature is now production-only.
+          # 'nonisolated deinit' == plain 'deinit' in Swift 5, so the replacement
+          # is semantically equivalent.
+          #
+          # Step 1: nonisolated deinit → deinit  (the main case in Nuke 13.0.2)
+          # Step 2: isolated deinit   → deinit  (catch any remaining actor-isolated deinit)
+          # NOTE: step 1 MUST run first so step 2 cannot re-match leftover 'isolated deinit'
+          #       inside words like 'nonisolated'.
+          find "$NUKE_DIR" -name "*.swift" \
+            -exec sed -i '' 's/nonisolated deinit/deinit/g' {} \;
+          find "$NUKE_DIR" -name "*.swift" \
             -exec sed -i '' 's/isolated deinit/deinit/g' {} \;
-          echo "Nuke patched ✅"
+
+          echo "=== Verifying patch ==="
+          grep -rn "isolated deinit" "$NUKE_DIR" \
+            && echo "⚠️  isolated deinit still present — check pattern" \
+            || echo "✅ Patch clean — no isolated deinit remaining"
 
       - name: Build unsigned .app
         run: |
