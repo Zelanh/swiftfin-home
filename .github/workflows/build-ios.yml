@@ -114,6 +114,9 @@ jobs:
 
       - name: Build unsigned .app
         run: |
+          # No custom SYMROOT — let xcodebuild place products inside derived_data.
+          # A custom SYMROOT causes SPM modules (e.g. CasePaths) to land in a path
+          # that dependent packages can't resolve when the build graph is evaluated.
           xcodebuild build \
             -project Swiftfin.xcodeproj \
             -scheme Swiftfin \
@@ -125,12 +128,12 @@ jobs:
             ONLY_ACTIVE_ARCH=NO \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
-            CODE_SIGN_IDENTITY="" \
-            SYMROOT="$RUNNER_TEMP/build"
+            CODE_SIGN_IDENTITY=""
 
       - name: Package as IPA
         run: |
-          APP_PATH=$(find "$RUNNER_TEMP/build" -name "*.app" ! -name "*.xctest" | head -1)
+          # Products land in derived_data/Build/Products/Release-iphoneos/ when no SYMROOT is set.
+          APP_PATH=$(find "$RUNNER_TEMP/derived_data/Build/Products" -name "*.app" ! -name "*.xctest" | head -1)
           echo "App encontrada en: $APP_PATH"
           mkdir -p "$RUNNER_TEMP/Payload"
           cp -r "$APP_PATH" "$RUNNER_TEMP/Payload/"
