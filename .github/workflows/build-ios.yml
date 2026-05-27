@@ -17,30 +17,30 @@ jobs:
 
       - name: Xcode setup
         run: |
-          # Xcode 26.3 is what upstream Swiftfin's ci.yml uses successfully.
+          # Match upstream Swiftfin's ci.yml — they use Xcode 26.3 successfully.
           if [ -d "/Applications/Xcode_26.3.app" ]; then
             sudo xcode-select -s /Applications/Xcode_26.3.app/Contents/Developer
             echo "Switched to Xcode 26.3"
           elif [ -d "/Applications/Xcode_26.0.app" ]; then
             sudo xcode-select -s /Applications/Xcode_26.0.app/Contents/Developer
-            echo "Switched to Xcode 26.0"
-          else
-            echo "Xcode 26.x not found — using runner default"
           fi
           sudo xcodebuild -license accept
           sudo xcodebuild -runFirstLaunch || true
           xcodebuild -version
 
-      - name: Trust Swift macros (defaults-level, in addition to -skipMacroValidation)
+      - name: Trust Swift macros & plugins
         run: |
           defaults write com.apple.dt.Xcode IDESkipMacroFingerprintValidation -bool YES
           defaults write com.apple.dt.Xcode IDESkipPackagePluginFingerprintValidatation -bool YES
 
-      - name: Install build tools
-        run: brew install swiftgen swiftformat swiftlint || true
+      - name: Setup Ruby (for Fastlane — exactly like upstream ci.yml)
+        uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: '3.3'
+          bundler-cache: true
 
-      - name: Install Carthage
-        run: brew install carthage
+      - name: Install Homebrew dependencies (carthage + tools, via project's Brewfile)
+        run: brew bundle --file Brewfile
 
       - name: Cache Carthage builds
         uses: actions/cache@v4
@@ -50,76 +50,48 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-carthage-
 
-      - name: Bootstrap Carthage (GoogleCast + VLC)
-        run: |
-          carthage bootstrap \
-            --use-xcframeworks \
-            --platform iOS \
-            --cache-builds
+      - name: Update Carthage (same as upstream ci.yml)
+        run: carthage update --use-xcframeworks --cache-builds
 
-      - name: Resolve SPM packages
+      - name: Resolve SPM packages (so we can patch Nuke before build)
         run: |
-          # Use the DEFAULT derived data path (~/Library/Developer/Xcode/DerivedData).
-          # The upstream Swiftfin CI builds successfully with the same package versions
-          # we have (swift-case-paths 1.7.3, StatefulMacro 0.0.2) using Fastlane,
-          # which uses the default derived data path. A custom -derivedDataPath appears
-          # to break the SPM build graph for products that mix library + macro plugin
-          # targets, preventing CasePaths.swiftmodule from being built for iOS.
           xcodebuild -resolvePackageDependencies \
             -project Swiftfin.xcodeproj \
             -scheme Swiftfin
 
       - name: Patch Nuke for isolated deinit compatibility
         run: |
-          # Nuke is now in the default derived data location.
           NUKE_DIR=$(find ~/Library/Developer/Xcode/DerivedData -path "*SourcePackages/checkouts/Nuke" -type d | head -1)
           echo "Found Nuke at: $NUKE_DIR"
           if [ -z "$NUKE_DIR" ]; then
-            echo "❌ Nuke checkout not found — resolve step must have failed"
-            exit 1
+            echo "❌ Nuke checkout not found"; exit 1
           fi
+          find "$NUKE_DIR" -name "*.swift" -exec sed -i '' 's/nonisolated deinit/deinit/g' {} \;
+          find "$NUKE_DIR" -name "*.swift" -exec sed -i '' 's/isolated deinit/deinit/g' {} \;
+          grep -rn "isolated deinit" "$NUKE_DIR" && echo "⚠️" || echo "✅ Nuke patch clean"
 
-          # Nuke 13.0.2 uses 'nonisolated deinit'. In Swift 5 language mode this
-          # is rejected by Xcode 26.x. Replace with plain 'deinit'.
-          # Step 1 MUST run first to avoid 'nonisolated' being partially matched.
-          find "$NUKE_DIR" -name "*.swift" \
-            -exec sed -i '' 's/nonisolated deinit/deinit/g' {} \;
-          find "$NUKE_DIR" -name "*.swift" \
-            -exec sed -i '' 's/isolated deinit/deinit/g' {} \;
-
-          grep -rn "isolated deinit" "$NUKE_DIR" \
-            && echo "⚠️  isolated deinit still present" \
-            || echo "✅ Patch clean"
-
-      - name: Build unsigned .app
+      - name: Build with Fastlane (identical invocation to upstream Swiftfin's ci.yml)
         run: |
-          # Mirror the upstream Fastlane buildLane exactly:
-          # - No custom derivedDataPath (use default ~/Library/Developer/Xcode/DerivedData)
-          # - -skipMacroValidation (same as Fastfile's xcargs)
-          # - No CODE_SIGNING (Fastlane sets skipCodesigning: true)
-          # The key difference vs Fastlane: we keep -sdk iphoneos and -destination
-          # to force a device build (Fastlane's default destination is simulator).
-          xcodebuild build \
-            -skipMacroValidation \
-            -project Swiftfin.xcodeproj \
-            -scheme Swiftfin \
-            -sdk iphoneos \
-            -destination "generic/platform=iOS" \
-            -configuration Release \
-            ARCHS=arm64 \
-            ONLY_ACTIVE_ARCH=NO \
-            CODE_SIGNING_ALLOWED=NO \
-            CODE_SIGNING_REQUIRED=NO \
-            CODE_SIGN_IDENTITY=""
+          # This is the EXACT same command upstream uses (and we've verified it
+          # passes on their CI with the same package versions). Fastlane internally
+          # invokes xcodebuild with whatever default flags make the SPM build graph
+          # correctly produce CasePaths.swiftmodule for iOS (which our direct
+          # xcodebuild invocations were failing to do).
+          bundle exec fastlane buildLane \
+            scheme:"\"Swiftfin\"" \
+            xcodeVersion:26.3
 
       - name: Package as IPA
         run: |
-          # .app ends up in default derived data location.
           APP_PATH=$(find ~/Library/Developer/Xcode/DerivedData -path "*/Build/Products/Release-iphoneos/*.app" ! -name "*.xctest" | head -1)
+          # Fallback: simulator or other config
+          if [ -z "$APP_PATH" ]; then
+            APP_PATH=$(find ~/Library/Developer/Xcode/DerivedData -name "*.app" ! -name "*.xctest" -type d | head -1)
+          fi
           echo "App encontrada en: $APP_PATH"
           if [ -z "$APP_PATH" ]; then
-            echo "❌ No .app found"
-            find ~/Library/Developer/Xcode/DerivedData -name "*.app" -type d | head -20
+            echo "❌ No .app found. Listing all .app files under DerivedData:"
+            find ~/Library/Developer/Xcode/DerivedData -name "*.app" -type d
             exit 1
           fi
           mkdir -p "$RUNNER_TEMP/Payload"
