@@ -70,6 +70,9 @@ jobs:
           find "$NUKE_DIR" -name "*.swift" -exec sed -i '' 's/isolated deinit/deinit/g' {} \;
           grep -rn "isolated deinit" "$NUKE_DIR" && echo "⚠️" || echo "✅ Nuke patch clean"
 
+      - name: Ensure FastlaneRunner is executable
+        run: chmod +x fastlane/FastlaneRunner
+
       - name: Build with Fastlane (identical invocation to upstream Swiftfin's ci.yml)
         run: |
           # This is the EXACT same command upstream uses (and we've verified it
