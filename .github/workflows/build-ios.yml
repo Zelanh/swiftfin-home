@@ -82,6 +82,12 @@ jobs:
         run: chmod +x fastlane/FastlaneRunner
 
       - name: Build with Fastlane (identical invocation to upstream Swiftfin's ci.yml)
+        env:
+          # Fastlane's default 3-second base timeout for `xcodebuild -showBuildSettings`
+          # is too aggressive for CI runners under load — they sometimes need 30+
+          # seconds just to parse a large pbxproj. Bumping base to 60s gives plenty
+          # of headroom (Fastlane doubles each retry: 60 → 120 → 240 → 480s = 15min total).
+          FASTLANE_XCODEBUILD_SETTINGS_TIMEOUT: '60'
         run: |
           # This is the EXACT same command upstream uses (and we've verified it
           # passes on their CI with the same package versions). Fastlane internally
