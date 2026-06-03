@@ -10,6 +10,8 @@
 		53ABFDDC267972BF00886593 /* TVServices.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 53ABFDDB267972BF00886593 /* TVServices.framework */; };
 		62666DF727E5012C00EC0ECD /* MobileVLCKit.xcframework in Frameworks */ = {isa = PBXBuildFile; fileRef = 53D5E3DC264B47EE00BADDC8 /* MobileVLCKit.xcframework */; };
 		62666DF827E5012C00EC0ECD /* MobileVLCKit.xcframework in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = 53D5E3DC264B47EE00BADDC8 /* MobileVLCKit.xcframework */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
+		E1B2AB9728808CDF0072B3B9 /* GoogleCast.xcframework in Frameworks */ = {isa = PBXBuildFile; fileRef = E1B2AB9628808CDF0072B3B9 /* GoogleCast.xcframework */; };
+		E1B2AB9828808CDF0072B3B9 /* GoogleCast.xcframework in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = E1B2AB9628808CDF0072B3B9 /* GoogleCast.xcframework */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
 		62666DFA27E5013700EC0ECD /* TVVLCKit.xcframework in Frameworks */ = {isa = PBXBuildFile; fileRef = 625CB57D2678E81E00530A6E /* TVVLCKit.xcframework */; };
 		62666DFB27E5013700EC0ECD /* TVVLCKit.xcframework in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = 625CB57D2678E81E00530A6E /* TVVLCKit.xcframework */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
 		62666DFD27E5014F00EC0ECD /* AudioToolbox.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 5362E4AE267D40B5000E2F71 /* AudioToolbox.framework */; };
@@ -126,6 +128,7 @@
 			dstSubfolderSpec = 10;
 			files = (
 				62666DF827E5012C00EC0ECD /* MobileVLCKit.xcframework in Embed Frameworks */,
+				E1B2AB9828808CDF0072B3B9 /* GoogleCast.xcframework in Embed Frameworks */,
 			);
 			name = "Embed Frameworks";
 			runOnlyForDeploymentPostprocessing = 0;
@@ -322,6 +325,7 @@
 				E15210582946DF1B00375CC2 /* PulseUI in Frameworks */,
 				E1153DA42BBA614F00424D36 /* CollectionVGrid in Frameworks */,
 				62666DF727E5012C00EC0ECD /* MobileVLCKit.xcframework in Frameworks */,
+				E1B2AB9728808CDF0072B3B9 /* GoogleCast.xcframework in Frameworks */,
 				62666E0327E5017100EC0ECD /* CoreMedia.framework in Frameworks */,
 				E1B9743B2E86F51D008CED48 /* StatefulMacros in Frameworks */,
 				E10706122942F57D00646DAF /* PulseLogHandler in Frameworks */,

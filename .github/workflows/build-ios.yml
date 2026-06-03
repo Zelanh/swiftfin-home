@@ -53,6 +53,14 @@ jobs:
       - name: Update Carthage (same as upstream ci.yml)
         run: carthage update --use-xcframeworks --cache-builds
 
+      - name: Verify Carthage output (diagnostic — cheap, helps if GoogleCast still fails)
+        run: |
+          echo "=== Carthage/Build contents ==="
+          ls -la Carthage/Build/ || echo "No Carthage/Build directory"
+          echo ""
+          echo "=== Looking for GoogleCast specifically ==="
+          find Carthage -maxdepth 3 -iname "*googlecast*" -o -iname "*chromecast*" 2>/dev/null || true
+
       - name: Resolve SPM packages (so we can patch Nuke before build)
         run: |
           xcodebuild -resolvePackageDependencies \
