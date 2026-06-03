@@ -18,9 +18,11 @@ class AppDelegate: NSObject, UIApplicationDelegate {
     ) -> Bool {
         let castOptions = GCKCastOptions(receiverApplicationID: CastManager.jellyfinReceiverAppID)
         castOptions.physicalVolumeButtonsWillControlDeviceVolume = true
-        GCKCastContext.setSharedInstance(with: castOptions)
+        GCKCastContext.setSharedInstanceWith(castOptions)
         GCKCastContext.sharedInstance().useDefaultExpandedMediaControls = true
-        GCKLogger.sharedInstance().delegate = GCKConsoleLogger.sharedInstance()
+        // GCKConsoleLogger was removed in GoogleCast SDK 4.x.
+        // For logging, implement GCKLoggerDelegate on a class and assign it to
+        // GCKLogger.sharedInstance().delegate. Skipping here — not required for Chromecast functionality.
 
         return true
     }
