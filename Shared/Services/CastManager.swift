@@ -42,17 +42,24 @@ final class CastManager: NSObject, ObservableObject {
 
     // MARK: - Media Loading
 
+    /// @MainActor because we read main-actor-isolated properties on `MediaPlayerItem`
+    /// (`selectedAudioStreamIndex`, `selectedSubtitleStreamIndex`) inside `buildMediaInformation`.
+    /// `load` is invoked from UI handlers, so main-actor isolation is the natural fit.
+    @MainActor
     func load(item: MediaPlayerItem) {
         guard let session = GCKCastContext.sharedInstance().sessionManager.currentCastSession else { return }
         guard let userSession = Container.shared.currentUserSession() else { return }
 
         let mediaInfo = buildMediaInformation(for: item, userSession: userSession)
 
-        let requestData = GCKMediaLoadRequestData()
-        requestData.mediaInformation = mediaInfo
+        // GCKMediaLoadRequestData is immutable; properties are get-only.
+        // Use GCKMediaLoadRequestDataBuilder to construct it.
+        let requestBuilder = GCKMediaLoadRequestDataBuilder()
+        requestBuilder.mediaInformation = mediaInfo
         let resumeOffset = Double(Defaults[.VideoPlayer.resumeOffset])
-        requestData.startTime = max(0, (item.baseItem.startSeconds?.seconds ?? 0) - resumeOffset)
-        requestData.autoplay = true
+        requestBuilder.startTime = max(0, (item.baseItem.startSeconds?.seconds ?? 0) - resumeOffset)
+        requestBuilder.autoplay = NSNumber(value: true)
+        let requestData = requestBuilder.build()
 
         session.remoteMediaClient?.loadMedia(with: requestData)
         session.remoteMediaClient?.add(self)
@@ -81,7 +88,8 @@ final class CastManager: NSObject, ObservableObject {
     }
 
     func setPlaybackRate(_ rate: Float) {
-        currentSession?.remoteMediaClient?.setPlaybackRate(Double(rate), customData: nil)
+        // GoogleCast SDK expects Float, not Double — drop the conversion.
+        currentSession?.remoteMediaClient?.setPlaybackRate(rate, customData: nil)
     }
 
     func endSession() {
@@ -94,6 +102,7 @@ final class CastManager: NSObject, ObservableObject {
         GCKCastContext.sharedInstance().sessionManager.currentCastSession
     }
 
+    @MainActor
     private func buildMediaInformation(for item: MediaPlayerItem, userSession: UserSession) -> GCKMediaInformation {
         let metadata = buildMetadata(for: item, userSession: userSession)
 
@@ -124,7 +133,9 @@ final class CastManager: NSObject, ObservableObject {
 
         if baseItem.type == .episode {
             metadata.setString(baseItem.seriesName ?? baseItem.displayTitle, forKey: kGCKMetadataKeySeriesTitle)
-            metadata.setString(baseItem.displayTitle, forKey: kGCKMetadataKeyEpisodeTitle)
+            // GoogleCast SDK 4.x: no kGCKMetadataKeyEpisodeTitle; use kGCKMetadataKeyTitle
+            // (it represents the episode title under a TV-show metadata type, per convention).
+            metadata.setString(baseItem.displayTitle, forKey: kGCKMetadataKeyTitle)
             if let season = baseItem.parentIndexNumber {
                 metadata.setInteger(season, forKey: kGCKMetadataKeySeasonNumber)
             }
