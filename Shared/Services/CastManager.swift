@@ -188,7 +188,8 @@ final class CastManager: NSObject, ObservableObject {
             let jsonString = String(data: jsonData, encoding: .utf8)
         else { return }
 
-        try? channel.sendTextMessage(jsonString)
+        // GoogleCast SDK uses Objective-C NSError-by-reference, not Swift throws.
+        channel.sendTextMessage(jsonString, error: nil)
     }
 
     private static func encodeToDictionary<T: Encodable>(_ value: T) throws -> [String: Any]? {
