@@ -25,6 +25,13 @@ final class CastManager: NSObject, ObservableObject {
 
     static let jellyfinReceiverAppID = "F007D354"
 
+    /// The Jellyfin Cast receiver listens for commands on this custom Cast namespace
+    /// — the exact same one the official `jellyfin-web` Chromecast sender uses.
+    /// Standard CAF `loadMedia` requests are NOT handled by the Jellyfin receiver;
+    /// it expects a JSON payload (`{command, serverAddress, accessToken, options}`)
+    /// delivered via this channel.
+    private static let jellyfinNamespace = "urn:x-cast:com.connectsdk"
+
     @Published private(set) var isSessionActive = false
     @Published private(set) var connectedDeviceName: String? = nil
     @Published private(set) var hasAvailableDevices = false
@@ -34,6 +41,10 @@ final class CastManager: NSObject, ObservableObject {
     /// Position at the moment a Cast session ended, used to resume local playback.
     private(set) var castEndedPosition: Duration? = nil
 
+    /// Channel bound to the Jellyfin custom namespace for the active session.
+    /// Recreated each time a session starts/resumes; cleared when it ends.
+    private var jellyfinChannel: GCKGenericChannel?
+
     override init() {
         super.init()
         GCKCastContext.sharedInstance().sessionManager.add(self)
@@ -42,30 +53,59 @@ final class CastManager: NSObject, ObservableObject {
 
     // MARK: - Media Loading
 
+    /// Send a `PlayNow` command to the Jellyfin receiver via its custom namespace.
+    ///
+    /// The receiver uses this message to construct its own playback URL on the
+    /// Jellyfin server (from `serverAddress` + `accessToken` + item `Id`), so we
+    /// don't need to send a stream URL ourselves.
+    ///
     /// @MainActor because we read main-actor-isolated properties on `MediaPlayerItem`
-    /// (`selectedAudioStreamIndex`, `selectedSubtitleStreamIndex`) inside `buildMediaInformation`.
-    /// `load` is invoked from UI handlers, so main-actor isolation is the natural fit.
+    /// (`selectedAudioStreamIndex`, `selectedSubtitleStreamIndex`).
     @MainActor
     func load(item: MediaPlayerItem) {
-        guard let session = GCKCastContext.sharedInstance().sessionManager.currentCastSession else { return }
         guard let userSession = Container.shared.currentUserSession() else { return }
+        guard let channel = jellyfinChannel else { return }
 
-        let mediaInfo = buildMediaInformation(for: item, userSession: userSession)
-
-        // GCKMediaLoadRequestData is immutable; properties are get-only.
-        // Use GCKMediaLoadRequestDataBuilder to construct it.
-        let requestBuilder = GCKMediaLoadRequestDataBuilder()
-        requestBuilder.mediaInformation = mediaInfo
+        // Jellyfin uses ticks (100ns units): 1 second = 10,000,000 ticks.
+        let startSeconds = item.baseItem.startSeconds?.seconds ?? 0
         let resumeOffset = Double(Defaults[.VideoPlayer.resumeOffset])
-        requestBuilder.startTime = max(0, (item.baseItem.startSeconds?.seconds ?? 0) - resumeOffset)
-        requestBuilder.autoplay = NSNumber(value: true)
-        let requestData = requestBuilder.build()
+        let adjustedSeconds = max(0, startSeconds - resumeOffset)
+        let startPositionTicks = Int64(adjustedSeconds * 10_000_000)
 
-        session.remoteMediaClient?.loadMedia(with: requestData)
-        session.remoteMediaClient?.add(self)
+        // Re-encode the BaseItemDto back to its server JSON shape. JellyfinAPI's
+        // CodingKeys map Swift camelCase ↔ server PascalCase, so a round-trip
+        // through JSONEncoder + JSONSerialization gives us a [String: Any] in
+        // the exact format the receiver expects in `options.items[]`.
+        guard let baseItemJSON = try? Self.encodeToDictionary(item.baseItem) else { return }
+
+        let options: [String: Any] = [
+            "items": [baseItemJSON],
+            "startPositionTicks": startPositionTicks,
+            "mediaSourceId": item.mediaSource.id ?? "",
+            "audioStreamIndex": item.selectedAudioStreamIndex ?? -1,
+            "subtitleStreamIndex": item.selectedSubtitleStreamIndex ?? -1,
+        ]
+
+        let message: [String: Any] = [
+            "command": "PlayNow",
+            "serverAddress": userSession.server.currentURL.absoluteString,
+            "accessToken": userSession.user.accessToken,
+            "userId": userSession.user.id,
+            "options": options,
+        ]
+
+        // Listen for media status updates so the iOS UI (position, play/pause state)
+        // stays in sync with whatever the receiver decides to play.
+        currentSession?.remoteMediaClient?.add(self)
+
+        sendCustomMessage(message, on: channel)
     }
 
     // MARK: - Playback Control
+    //
+    // Standard CAF media commands. The Jellyfin receiver runs CAF underneath,
+    // so play/pause/seek delivered through GCKRemoteMediaClient act on the
+    // active media session and also keep our `mediaStatus` observation working.
 
     func play() {
         currentSession?.remoteMediaClient?.play()
@@ -88,7 +128,6 @@ final class CastManager: NSObject, ObservableObject {
     }
 
     func setPlaybackRate(_ rate: Float) {
-        // GoogleCast SDK expects Float, not Double — drop the conversion.
         currentSession?.remoteMediaClient?.setPlaybackRate(rate, customData: nil)
     }
 
@@ -102,60 +141,26 @@ final class CastManager: NSObject, ObservableObject {
         GCKCastContext.sharedInstance().sessionManager.currentCastSession
     }
 
-    @MainActor
-    private func buildMediaInformation(for item: MediaPlayerItem, userSession: UserSession) -> GCKMediaInformation {
-        let metadata = buildMetadata(for: item, userSession: userSession)
+    private func sendCustomMessage(_ message: [String: Any], on channel: GCKGenericChannel) {
+        guard
+            let jsonData = try? JSONSerialization.data(withJSONObject: message),
+            let jsonString = String(data: jsonData, encoding: .utf8)
+        else { return }
 
-        let customData: [String: Any] = [
-            "userId": userSession.user.id,
-            "accessToken": userSession.user.accessToken,
-            "serverAddress": userSession.server.currentURL.absoluteString,
-            "itemId": item.baseItem.id ?? "",
-            "mediaSourceId": item.mediaSource.id ?? "",
-            "audioStreamIndex": item.selectedAudioStreamIndex ?? -1,
-            "subtitleStreamIndex": item.selectedSubtitleStreamIndex ?? -1,
-        ]
-
-        let builder = GCKMediaInformationBuilder(contentURL: item.url)
-        builder.streamType = item.baseItem.isLiveStream ? .live : .buffered
-        builder.contentType = "video/mp4"
-        builder.metadata = metadata
-        builder.streamDuration = item.baseItem.runtime?.seconds ?? 0
-        builder.customData = customData
-
-        return builder.build()
+        try? channel.sendTextMessage(jsonString)
     }
 
-    private func buildMetadata(for item: MediaPlayerItem, userSession: UserSession) -> GCKMediaMetadata {
-        let baseItem = item.baseItem
-        let metadataType: GCKMediaMetadataType = baseItem.type == .episode ? .tvShow : .movie
-        let metadata = GCKMediaMetadata(metadataType: metadataType)
+    private static func encodeToDictionary<T: Encodable>(_ value: T) throws -> [String: Any]? {
+        let data = try JSONEncoder().encode(value)
+        return try JSONSerialization.jsonObject(with: data) as? [String: Any]
+    }
 
-        if baseItem.type == .episode {
-            metadata.setString(baseItem.seriesName ?? baseItem.displayTitle, forKey: kGCKMetadataKeySeriesTitle)
-            // GoogleCast SDK 4.x: no kGCKMetadataKeyEpisodeTitle; use kGCKMetadataKeyTitle
-            // (it represents the episode title under a TV-show metadata type, per convention).
-            metadata.setString(baseItem.displayTitle, forKey: kGCKMetadataKeyTitle)
-            if let season = baseItem.parentIndexNumber {
-                metadata.setInteger(season, forKey: kGCKMetadataKeySeasonNumber)
-            }
-            if let episode = baseItem.indexNumber {
-                metadata.setInteger(episode, forKey: kGCKMetadataKeyEpisodeNumber)
-            }
-        } else {
-            metadata.setString(baseItem.displayTitle, forKey: kGCKMetadataKeyTitle)
-        }
-
-        if let itemID = baseItem.id {
-            let imageURL = userSession.server.currentURL
-                .appendingPathComponent("Items")
-                .appendingPathComponent(itemID)
-                .appendingPathComponent("Images")
-                .appendingPathComponent("Primary")
-            metadata.addImage(GCKImage(url: imageURL, width: 512, height: 512))
-        }
-
-        return metadata
+    /// Attach a fresh custom-namespace channel to the given session.
+    /// Called from session-start AND session-resume callbacks.
+    private func attachJellyfinChannel(to session: GCKCastSession) {
+        let channel = GCKGenericChannel(namespace: Self.jellyfinNamespace)
+        session.add(channel)
+        jellyfinChannel = channel
     }
 }
 
@@ -164,6 +169,7 @@ final class CastManager: NSObject, ObservableObject {
 extension CastManager: GCKSessionManagerListener {
 
     func sessionManager(_ sessionManager: GCKSessionManager, didStart session: GCKCastSession) {
+        attachJellyfinChannel(to: session)
         DispatchQueue.main.async {
             self.isSessionActive = true
             self.connectedDeviceName = session.device.friendlyName
@@ -173,6 +179,7 @@ extension CastManager: GCKSessionManagerListener {
     }
 
     func sessionManager(_ sessionManager: GCKSessionManager, didEnd session: GCKCastSession, withError error: Error?) {
+        jellyfinChannel = nil
         DispatchQueue.main.async {
             self.castEndedPosition = .seconds(self.currentCastPosition)
             self.isSessionActive = false
@@ -188,6 +195,7 @@ extension CastManager: GCKSessionManagerListener {
     }
 
     func sessionManager(_ sessionManager: GCKSessionManager, didResumeCastSession session: GCKCastSession) {
+        attachJellyfinChannel(to: session)
         DispatchQueue.main.async {
             self.isSessionActive = true
             self.connectedDeviceName = session.device.friendlyName
