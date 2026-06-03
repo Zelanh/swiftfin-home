@@ -134,7 +134,8 @@ private struct CastingView: View {
                 Image(systemName: "tv.and.mediabox")
                     .font(.system(size: 64, weight: .thin))
                     .foregroundStyle(.white.opacity(0.85))
-                    .symbolEffect(.pulse)
+                    // .symbolEffect(.pulse) — iOS 17+ only; Swiftfin targets iOS 15.
+                    // Drop the animation rather than wrap in #available for one place.
 
                 VStack(spacing: 6) {
                     Text(L10n.casting)
