@@ -11,6 +11,7 @@ import Factory
 import Foundation
 import GoogleCast
 import JellyfinAPI
+import UIKit
 
 extension Container {
 
@@ -86,19 +87,59 @@ final class CastManager: NSObject, ObservableObject {
             "subtitleStreamIndex": item.selectedSubtitleStreamIndex ?? -1,
         ]
 
-        let message: [String: Any] = [
-            "command": "PlayNow",
-            "serverAddress": userSession.server.currentURL.absoluteString,
-            "accessToken": userSession.user.accessToken,
-            "userId": userSession.user.id,
-            "options": options,
-        ]
+        let message = baseMessage(
+            command: "PlayNow",
+            userSession: userSession,
+            options: options
+        )
 
         // Listen for media status updates so the iOS UI (position, play/pause state)
         // stays in sync with whatever the receiver decides to play.
         currentSession?.remoteMediaClient?.add(self)
 
         sendCustomMessage(message, on: channel)
+    }
+
+    /// Send the `Identify` handshake to the receiver immediately after the
+    /// session is established. The jellyfin-web client does this on connect —
+    /// without it the receiver may ignore subsequent `PlayNow` commands.
+    private func sendIdentify() {
+        guard let channel = jellyfinChannel else { return }
+        guard let userSession = Container.shared.currentUserSession() else { return }
+
+        let message = baseMessage(
+            command: "Identify",
+            userSession: userSession,
+            options: [:]
+        )
+        sendCustomMessage(message, on: channel)
+    }
+
+    /// Build the top-level JSON payload shape that the Jellyfin receiver expects
+    /// for every command on the custom namespace. Matches `jellyfin-web`'s
+    /// `sendMessage` shape: command + identity + session + nested options.
+    private func baseMessage(
+        command: String,
+        userSession: UserSession,
+        options: [String: Any]
+    ) -> [String: Any] {
+        var message: [String: Any] = [
+            "command": command,
+            "serverAddress": userSession.server.currentURL.absoluteString,
+            "accessToken": userSession.user.accessToken,
+            "userId": userSession.user.id,
+            "deviceId": "\(UIDevice.platform)_\(UIDevice.vendorUUIDString)",
+            "serverId": userSession.server.id,
+            "options": options,
+        ]
+        // Server version is opportunistic — only included if we have it cached.
+        if let version = StoredValues[.Server.publicInfo(id: userSession.server.id)].version {
+            message["serverVersion"] = version
+        }
+        if let receiverName = currentSession?.device.friendlyName {
+            message["receiverName"] = receiverName
+        }
+        return message
     }
 
     // MARK: - Playback Control
@@ -175,6 +216,8 @@ extension CastManager: GCKSessionManagerListener {
             self.connectedDeviceName = session.device.friendlyName
             self.castEndedPosition = nil
             session.remoteMediaClient?.add(self)
+            // Send the Identify handshake the receiver expects before any other command.
+            self.sendIdentify()
         }
     }
 
@@ -200,6 +243,8 @@ extension CastManager: GCKSessionManagerListener {
             self.isSessionActive = true
             self.connectedDeviceName = session.device.friendlyName
             session.remoteMediaClient?.add(self)
+            // Re-identify on resume too — the receiver may have lost state.
+            self.sendIdentify()
         }
     }
 
