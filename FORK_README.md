@@ -314,7 +314,39 @@ restore the cosmetic features. PRs welcome but not promised.
 
 ## Installation
 
+### Quick install (no build required)
+
+If you just want the IPA without cloning and building anything:
+
+1. Go to the **[Releases page](https://github.com/Zelanh/swiftfin-home/releases)**.
+2. Pick the most recent release.
+3. Under **Assets**, download `Swiftfin-Chromecast.ipa`.
+4. **(Strongly recommended)** Verify the SHA-256 hash of what you
+   downloaded against the value published in the release notes:
+   - Windows (PowerShell): `Get-FileHash Swiftfin-Chromecast.ipa -Algorithm SHA256`
+   - macOS / Linux: `shasum -a 256 Swiftfin-Chromecast.ipa`
+   If the hash does **not** match, do not install — the file may have
+   been tampered with in transit.
+5. **The IPA is unsigned** — you cannot install it on an iPhone as-is.
+   You must sign it yourself with one of the methods listed under
+   [Signing & installing the IPA](#signing--installing-the-ipa) below.
+   This is **mandatory** and a consequence of how Apple's app signing
+   works, not a limitation of this fork.
+
+> 🔍 **About release provenance.** Releases are normally published from
+> GitHub Actions runs in this repository (the `.github/workflows/build-ios.yml`
+> workflow). Each release's description tells you the exact run it was
+> built from, so anyone can trace the binary back to its commit. When the
+> monthly Actions allowance is exhausted, the most recent build's IPA
+> may be uploaded manually — this is always disclosed in the release
+> notes. If you want extra assurance, fork this repository and build the
+> same commit yourself; the result should be bit-identical (modulo
+> timestamps embedded in the binary).
+
 ### Building from source
+
+If you would rather build the IPA yourself (for example, to modify the
+code or to keep a continuously fresh artifact):
 
 1. Fork or clone this repo.
 2. Push to a branch that triggers the workflow (`main` or `feature/**`).
@@ -322,6 +354,7 @@ restore the cosmetic features. PRs welcome but not promised.
    `macos-15` runners).
 4. Download the `Swiftfin-Chromecast-<number>` artifact from the run
    summary. The zip contains `Swiftfin-Chromecast.ipa`.
+5. Sign and install per the section below.
 
 ### Signing & installing the IPA
 
@@ -329,10 +362,18 @@ The artifact is **unsigned**. To install on a device you need one of:
 
 | Method | Cost | App lifetime | Setup effort |
 |---|---|---|---|
-| Sideloadly / 3uTools + free Apple ID | Free | 7 days | Easiest |
-| AltStore Classic + AltServer | Free | Auto-refreshed weekly while server is reachable | Medium |
+| Free Apple ID via standard sideloading tools | Free | 7 days | Easiest |
+| Community auto-refresh tools (e.g. AltStore-like) | Free | Refreshed periodically while infrastructure is reachable | Medium |
 | Apple Developer Program + Ad Hoc | $99/year | 1 year | One-time setup, easiest long-term |
 | TestFlight (requires Developer Program) | $99/year | 90 days per build | Medium |
+
+> ⚠️ **Choose your signing path carefully.** The third-party tools that
+> exist for sideloading with a free Apple ID are widely used and rely on
+> Apple's own developer APIs, but Apple has at times labeled some of them
+> as "out of policy". They are not prohibited by Jellyfin or by this fork,
+> but it is your responsibility to review the terms of service of any tool
+> you choose and use it at your own risk. The only path that has zero
+> ambiguity is the official **Apple Developer Program**.
 
 This fork's GitHub Actions workflow could be extended to sign the IPA in
 CI if you have a Developer Program account — that's an exercise left to
@@ -366,3 +407,20 @@ If you spot something that the **upstream Swiftfin team** could benefit
 from (a protocol detail, a build fix, a Carthage tweak), please consider
 opening it as an issue in the upstream repo rather than just here — it
 helps them more than it helps this fork.
+
+---
+
+## Note to the Jellyfin / Swiftfin maintainers
+
+If you are part of the Jellyfin or Swiftfin project and you have any
+concerns about this fork — wording, naming, scope, the AI-assisted
+nature of the changes, anything — please open an issue here or reach
+out directly via the contact details in the GitHub profile. I will
+take down, rename, or modify whatever you ask without argument.
+
+This fork exists because the upstream iOS app does not currently ship
+Chromecast support and one specific household needed it. It is not an
+attempt to fork the project in any meaningful sense, to compete with
+upstream, to suggest that AI-generated code belongs in your project,
+or to claim any expertise. It is a personal-use build, made public
+only in case someone else has the same narrow need.
