@@ -20,6 +20,16 @@ extension Container {
     }
 }
 
+extension Defaults.Keys {
+
+    /// The user's preferred maximum bitrate (in bits/sec) when streaming to a Cast device.
+    /// `0` means no cap (server / receiver default).
+    /// Default: 5 Mbps — a sane balance for Chromecast Ultra over a typical home WiFi.
+    static var castMaxBitrate: Key<Int> {
+        Key("castMaxBitrate", default: 5_000_000)
+    }
+}
+
 // MARK: - CastManager
 
 final class CastManager: NSObject, ObservableObject {
@@ -46,10 +56,26 @@ final class CastManager: NSObject, ObservableObject {
     /// Recreated each time a session starts/resumes; cleared when it ends.
     private var jellyfinChannel: GCKGenericChannel?
 
+    /// Cap (bits/sec) requested from the receiver for the next `load`. `0` means
+    /// "no cap" (server picks). Set by the quality picker just before casting.
+    var pendingMaxBitrate: Int = 0
+
+    /// Optional override for the audio stream index used by the next `load`.
+    /// `nil` means "use whatever is selected on the MediaPlayerItem". Set by
+    /// the quality picker, so the user can pick a different audio track for
+    /// Cast than the one they had selected locally.
+    var pendingAudioStreamIndex: Int? = nil
+
     override init() {
         super.init()
-        GCKCastContext.sharedInstance().sessionManager.add(self)
-        GCKCastContext.sharedInstance().discoveryManager.add(self)
+        let context = GCKCastContext.sharedInstance()
+        context.sessionManager.add(self)
+        context.discoveryManager.add(self)
+        // `GCKUICastButton` from the SDK starts discovery implicitly when it
+        // appears on screen. We replaced it with a plain SwiftUI button, so
+        // discovery has to be kicked off manually — otherwise `deviceCount`
+        // stays at 0 forever and our button never becomes visible.
+        context.discoveryManager.startDiscovery()
     }
 
     // MARK: - Media Loading
@@ -79,13 +105,21 @@ final class CastManager: NSObject, ObservableObject {
         // the exact format the receiver expects in `options.items[]`.
         guard let baseItemJSON = try? Self.encodeToDictionary(item.baseItem) else { return }
 
-        let options: [String: Any] = [
+        // Audio: picker override takes priority over the item's local selection.
+        let resolvedAudioIndex = pendingAudioStreamIndex ?? item.selectedAudioStreamIndex ?? -1
+
+        var options: [String: Any] = [
             "items": [baseItemJSON],
             "startPositionTicks": startPositionTicks,
             "mediaSourceId": item.mediaSource.id ?? "",
-            "audioStreamIndex": item.selectedAudioStreamIndex ?? -1,
+            "audioStreamIndex": resolvedAudioIndex,
             "subtitleStreamIndex": item.selectedSubtitleStreamIndex ?? -1,
         ]
+        // Only include `maxBitrate` when the user explicitly chose a cap.
+        // Sending 0 would tell the receiver "force 0 bps" — we want "no cap".
+        if pendingMaxBitrate > 0 {
+            options["maxBitrate"] = pendingMaxBitrate
+        }
 
         let message = baseMessage(
             command: "PlayNow",
