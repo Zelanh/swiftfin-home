@@ -68,8 +68,14 @@ final class CastManager: NSObject, ObservableObject {
 
     override init() {
         super.init()
-        GCKCastContext.sharedInstance().sessionManager.add(self)
-        GCKCastContext.sharedInstance().discoveryManager.add(self)
+        let context = GCKCastContext.sharedInstance()
+        context.sessionManager.add(self)
+        context.discoveryManager.add(self)
+        // `GCKUICastButton` from the SDK starts discovery implicitly when it
+        // appears on screen. We replaced it with a plain SwiftUI button, so
+        // discovery has to be kicked off manually — otherwise `deviceCount`
+        // stays at 0 forever and our button never becomes visible.
+        context.discoveryManager.startDiscovery()
     }
 
     // MARK: - Media Loading

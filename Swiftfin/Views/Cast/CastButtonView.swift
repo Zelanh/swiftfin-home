@@ -42,6 +42,11 @@ struct CastButtonView: View {
         // Match `GCKUICastButton`'s behaviour: hide when no devices are around.
         .opacity(castManager.hasAvailableDevices || castManager.isSessionActive ? 1 : 0)
         .disabled(!(castManager.hasAvailableDevices || castManager.isSessionActive))
+        .onAppear {
+            // Belt-and-braces: kick discovery on every appearance. The SDK's
+            // `startDiscovery()` is idempotent, so calling it again is free.
+            GCKCastContext.sharedInstance().discoveryManager.startDiscovery()
+        }
         .sheet(isPresented: $showingQualityPicker) {
             // `handleTap` only flips this on when `playbackItem` is present, so
             // the optional unwrap is just a defensive guard.
