@@ -36,6 +36,46 @@
 - Pauses local VLC playback when a Cast session starts and (best-effort)
   restores playback position when the Cast session ends.
 
+## Usage notes & caveats
+
+A few small things to know that aren't bugs but can surprise first-time
+users. Skim these before assuming something is broken:
+
+- **You must start playback first.** The Cast button lives inside the
+  video player's navigation overlay, not on the browse / item info
+  screens. Open a movie or episode, start playing it locally, *then* the
+  Cast button becomes available in the player toolbar. Most other
+  Jellyfin clients expose Cast from earlier screens; this fork does not
+  (yet — see the TODO section at the end of the file).
+- **The Cast button may take a few seconds to appear after entering the
+  player.** Device discovery uses mDNS / Bonjour and only starts when
+  the player loads. On a typical home WiFi the Chromecast is usually
+  found in 1–3 seconds, but on a busy or congested network it can take
+  10–30 seconds. If the button is missing, give it a moment before
+  assuming something is broken.
+- **The button hides itself if no Cast devices are discovered.** This
+  matches the SDK's standard behaviour — you only see it once at least
+  one Chromecast is on the same network as the iPhone. If you are sure
+  your Chromecast is on and you still don't see the button after about
+  a minute, check that:
+  - The iPhone and the Chromecast are on the **same WiFi** (not a guest
+    network).
+  - Your network does not block mDNS / Bonjour traffic (some VLAN
+    configurations or "AP isolation" settings on the router do).
+  - The Chromecast itself shows up in the Google Home app on the same
+    iPhone — if it does not, the issue is upstream of this app.
+- **Cancelling the device picker keeps your last chosen quality.** If
+  you open the quality picker, choose a bitrate, then back out of the
+  native device dialog without picking a device, your chosen bitrate is
+  still remembered for the next try. This is intentional and matches
+  how Streamyfin behaves.
+- **The "Maximum bitrate" values are hints, not hard caps.** The Jellyfin
+  Chromecast receiver interprets them as a quality tier and applies its
+  own device profile on top. Empirically, asking for `1.5 Mbps` produces
+  ~9 Mbps of output for a 1080p source, and asking for `8 Mbps` produces
+  ~18 Mbps. If a movie is stuttering on a higher tier, drop one or two
+  steps and try again.
+
 ## What this fork does NOT do
 
 - **No tvOS Chromecast support.** The GoogleCast SDK is iOS-only for
