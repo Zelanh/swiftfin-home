@@ -29,6 +29,12 @@ struct CastButtonView: View {
     @InjectedObject(\.mediaPlayerManager)
     private var manager: MediaPlayerManager
 
+    /// Foreground/background tracking — used to refresh discovery when the
+    /// user comes back to Swiftfin after visiting (e.g.) Google Home, which
+    /// is exactly when the iOS Bonjour cache becomes warm.
+    @Environment(\.scenePhase)
+    private var scenePhase
+
     @State
     private var showingQualityPicker = false
 
@@ -43,9 +49,16 @@ struct CastButtonView: View {
         .opacity(castManager.hasAvailableDevices || castManager.isSessionActive ? 1 : 0)
         .disabled(!(castManager.hasAvailableDevices || castManager.isSessionActive))
         .onAppear {
-            // Belt-and-braces: kick discovery on every appearance. The SDK's
-            // `startDiscovery()` is idempotent, so calling it again is free.
-            GCKCastContext.sharedInstance().discoveryManager.startDiscovery()
+            refreshDiscovery()
+        }
+        .onChange(of: scenePhase) { newPhase in
+            // The classic "Google Home trick" the user reported: opening the
+            // Home app warms the iOS Bonjour cache, then returning to Swiftfin
+            // makes the Cast button suddenly appear. By re-scanning on every
+            // .active transition we make that warming happen automatically.
+            if newPhase == .active {
+                refreshDiscovery()
+            }
         }
         .sheet(isPresented: $showingQualityPicker) {
             // `handleTap` only flips this on when `playbackItem` is present, so
@@ -88,6 +101,25 @@ struct CastButtonView: View {
             // Edge: button somehow visible without an item loaded. Skip the
             // picker and go straight to the native dialog with defaults.
             _ = GCKCastContext.sharedInstance().presentCastDialog()
+        }
+    }
+
+    /// Force a fresh device-discovery scan.
+    ///
+    /// A bare `startDiscovery()` on a cold app launch frequently fails to
+    /// find devices because iOS's mDNS/Bonjour stack is lazy: if no app has
+    /// recently triggered a scan, the OS doesn't bother to respond promptly.
+    /// The classic symptom (reported by users): the Cast button stays hidden
+    /// until you open Google Home — which warms the cache — and then comes
+    /// back to Swiftfin, at which point the button magically appears.
+    ///
+    /// Combining `stopDiscovery()` with a short delay before `startDiscovery()`
+    /// is a more aggressive kick that has proven reliable in the field.
+    private func refreshDiscovery() {
+        let mgr = GCKCastContext.sharedInstance().discoveryManager
+        mgr.stopDiscovery()
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+            mgr.startDiscovery()
         }
     }
 }

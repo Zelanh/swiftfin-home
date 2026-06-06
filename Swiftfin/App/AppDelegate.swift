@@ -24,6 +24,14 @@ class AppDelegate: NSObject, UIApplicationDelegate {
         // For logging, implement GCKLoggerDelegate on a class and assign it to
         // GCKLogger.sharedInstance().delegate. Skipping here — not required for Chromecast functionality.
 
+        // Kick device discovery at app launch (instead of waiting for the
+        // first @InjectedObject lookup on CastManager). On a cold launch the
+        // iOS Bonjour/mDNS subsystem can take 10–30 seconds to become
+        // responsive — starting discovery as early as possible gives it the
+        // most chances to populate before the user reaches the video player
+        // and expects the Cast button to appear.
+        GCKCastContext.sharedInstance().discoveryManager.startDiscovery()
+
         return true
     }
 
