@@ -114,6 +114,18 @@ final class CastManager: NSObject, ObservableObject {
             "mediaSourceId": item.mediaSource.id ?? "",
             "audioStreamIndex": resolvedAudioIndex,
             "subtitleStreamIndex": item.selectedSubtitleStreamIndex ?? -1,
+            // Generate a fresh UUID per cast attempt. Empirically, the Jellyfin
+            // server appears to key its active-transcode cache by playback
+            // session, so omitting this lets the server reuse a previous
+            // transcode (with its original bitrate cap) when the same item is
+            // recast — defeating the picker's new bitrate selection. A unique
+            // playSessionId per cast should make the server treat each attempt
+            // as a new playback session and spin up a fresh transcode at the
+            // chosen `maxBitrate`, resuming at `startPositionTicks` instead of
+            // forcing the user back to position 0. Hypothesis based on reading
+            // the jellyfin-chromecast receiver, which threads playSessionId
+            // through to its calls to the server.
+            "playSessionId": UUID().uuidString,
         ]
         // Only include `maxBitrate` when the user explicitly chose a cap.
         // Sending 0 would tell the receiver "force 0 bps" — we want "no cap".
