@@ -15,11 +15,11 @@ see [FORK_README.md](./FORK_README.md)).
 
 ---
 
-## 🟡 The Cast button doesn't appear after launching Swiftfin
+## 🟢 The Cast button doesn't appear after launching Swiftfin
 
-**Affected versions:** v1.0.0.
+**Affected versions:** v1.0.0. **Fixed in:** v1.1.0 (and current `main`).
 
-### Symptom
+### Symptom (v1.0.0)
 
 You open Swiftfin (fresh launch), start playing a movie, and the Cast
 button (TV icon) is missing from the player toolbar. Even after waiting
@@ -27,7 +27,7 @@ button (TV icon) is missing from the player toolbar. Even after waiting
 you can verify by opening Google Home, which finds the device in
 seconds.
 
-### Workaround (reliably repeatable)
+### Workaround for v1.0.0 (reliably repeatable)
 
 1. Minimise Swiftfin (don't force-quit — just background it)
 2. Open the **Google Home** app on the iPhone
@@ -40,8 +40,19 @@ makes the difference, not just any other app.
 
 ### Status
 
-🔧 **Fix in progress** on branch `feature/fix-cast-button-discovery`.
-Will be in v1.1.0.
+✅ **Fixed.** Verified on iPhone 14 against a Chromecast Ultra: the
+button now appears within seconds of entering the player on a cold
+start, without needing the Google Home workaround.
+
+The fix kicks `GCKDiscoveryManager.startDiscovery()` from
+`AppDelegate.didFinishLaunchingWithOptions` (instead of waiting for the
+first `CastManager` lookup), and re-arms a stop/start discovery cycle
+on `scenePhase == .active` from `CastButtonView`. This gives the iOS
+Bonjour/mDNS subsystem its earliest possible chance to populate the
+discovery cache before the user reaches the player.
+
+If you are still on a v1.0.0 IPA, the workaround above still applies.
+Upgrade to v1.1.0 or later to stop needing it.
 
 ---
 
