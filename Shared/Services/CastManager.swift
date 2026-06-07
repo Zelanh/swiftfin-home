@@ -263,6 +263,13 @@ extension CastManager: GCKSessionManagerListener {
             self.isSessionActive = false
             self.connectedDeviceName = nil
             self.castPlayerState = .idle
+            // Clear picker overrides so the next Cast attempt starts from
+            // a clean slate. Otherwise, if the user cancelled the device
+            // dialog or the session ended early, the *next* picker
+            // confirm could be ignored / overridden by lingering values
+            // from this one.
+            self.pendingMaxBitrate = 0
+            self.pendingAudioStreamIndex = nil
         }
     }
 

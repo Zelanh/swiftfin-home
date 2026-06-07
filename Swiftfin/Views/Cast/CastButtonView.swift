@@ -38,6 +38,13 @@ struct CastButtonView: View {
     @State
     private var showingQualityPicker = false
 
+    /// Latched at `onConfirm` time and read back from `.sheet(onDismiss:)`
+    /// so we present the native cast dialog AFTER the picker sheet has
+    /// fully animated out — instead of guessing with `asyncAfter`. See
+    /// the `.sheet` modifier below for the full reasoning.
+    @State
+    private var shouldPresentCastDialogAfterDismiss = false
+
     var body: some View {
         Button(action: handleTap) {
             Image(systemName: iconName)
@@ -60,7 +67,27 @@ struct CastButtonView: View {
                 refreshDiscovery()
             }
         }
-        .sheet(isPresented: $showingQualityPicker) {
+        .sheet(
+            isPresented: $showingQualityPicker,
+            onDismiss: {
+                // `onDismiss` fires AFTER SwiftUI has fully animated the
+                // sheet out — which is exactly the moment when
+                // `presentCastDialog()` can safely take over the
+                // foreground without colliding with the sheet's
+                // dismissal animation. Using this event instead of an
+                // `asyncAfter(0.4)` makes the flow robust to:
+                //   - iOS version changes to sheet animation duration
+                //   - slow devices where 0.4s is not enough
+                //   - users with Reduce Motion or VoiceOver enabled
+                //   - any future SwiftUI re-architecture of `.sheet`
+                // The latched bool distinguishes confirm (present dialog)
+                // from cancel (do nothing).
+                if shouldPresentCastDialogAfterDismiss {
+                    shouldPresentCastDialogAfterDismiss = false
+                    _ = GCKCastContext.sharedInstance().presentCastDialog()
+                }
+            }
+        ) {
             // `handleTap` only flips this on when `playbackItem` is present, so
             // the optional unwrap is just a defensive guard.
             if let item = manager.playbackItem {
@@ -69,12 +96,12 @@ struct CastButtonView: View {
                     onConfirm: { bitrate, audioIndex in
                         castManager.pendingMaxBitrate = bitrate
                         castManager.pendingAudioStreamIndex = audioIndex
+                        // Latch the intent; the actual cast-dialog
+                        // presentation happens from the sheet's
+                        // `onDismiss` so we wait for the real animation
+                        // end instead of guessing with a timer.
+                        shouldPresentCastDialogAfterDismiss = true
                         showingQualityPicker = false
-                        // Give the sheet a moment to dismiss before the
-                        // native cast dialog tries to present.
-                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
-                            _ = GCKCastContext.sharedInstance().presentCastDialog()
-                        }
                     },
                     onCancel: {
                         showingQualityPicker = false
