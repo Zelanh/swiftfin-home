@@ -68,6 +68,17 @@ struct CastQualityPickerView: View {
                 bitrateSection
             }
         }
+        .onAppear {
+            // Defensive: if Defaults[.castMaxBitrate] holds a value that is
+            // not present in the current bitrateOptions (e.g. because the
+            // options list changed between app versions, or because a buggy
+            // earlier picker run left a stale value), reset to a sane
+            // default so the picker shows a valid checked row instead of
+            // a desynced visual selection.
+            if !Self.bitrateOptions.contains(where: { $0.bps == selectedBitrate }) {
+                selectedBitrate = 5_000_000
+            }
+        }
     }
 
     private var header: some View {
@@ -110,13 +121,34 @@ struct CastQualityPickerView: View {
             .font(.footnote)
             .foregroundStyle(.secondary)
         ) {
-            Picker("Quality", selection: $selectedBitrate) {
-                ForEach(Self.bitrateOptions, id: \.bps) { option in
-                    Text(option.label).tag(option.bps)
+            // Explicit Button rows instead of `Picker(.inline)`:
+            // SwiftUI's inline picker style with an Int tag has been
+            // observed to desync the visual checkmark from the bound
+            // @State value (a row appears "selected" while the binding
+            // retains a different number). That manifested as the bug
+            // where tapping Start without first tapping a *different*
+            // tier sent the wrong maxBitrate to the receiver. Driving
+            // the assignment manually from each Button removes the
+            // ambiguity — the row that's drawn checked is exactly the
+            // one whose value is in @State.
+            ForEach(Self.bitrateOptions, id: \.bps) { option in
+                Button {
+                    selectedBitrate = option.bps
+                } label: {
+                    HStack {
+                        Text(option.label)
+                            .foregroundStyle(.primary)
+                        Spacer()
+                        if selectedBitrate == option.bps {
+                            Image(systemName: "checkmark")
+                                .font(.body.weight(.semibold))
+                                .foregroundStyle(.tint)
+                        }
+                    }
+                    .contentShape(Rectangle())
                 }
+                .buttonStyle(.plain)
             }
-            .pickerStyle(.inline)
-            .labelsHidden()
         }
     }
 }
