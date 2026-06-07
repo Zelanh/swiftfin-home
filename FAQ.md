@@ -56,11 +56,11 @@ Upgrade to v1.1.0 or later to stop needing it.
 
 ---
 
-## 🟠 The quality picker sometimes sends a different value than what is visually selected
+## 🟢 The quality picker sometimes sends a different value than what is visually selected
 
-**Affected versions:** v1.0.0.
+**Affected versions:** v1.0.0, v1.1.0. **Fixed in:** v1.2.0 (and current `main`).
 
-### Symptom
+### Symptom (v1.0.0 / v1.1.0)
 
 You tap the Cast button. The quality picker sheet appears, with one of
 the tiers already shown selected (the radio button is on it). You tap
@@ -82,7 +82,7 @@ This was verified after exhausting the obvious "stale state" causes:
 The wrong bitrate kept being sent until a **different tier was actively
 selected**.
 
-### Workaround (reliably repeatable)
+### Workaround for v1.0.0 / v1.1.0 (reliably repeatable)
 
 When the value you want is already shown as visually selected in the
 picker, **do not just tap Start**. Instead:
@@ -102,7 +102,88 @@ selection — you have to tap a *different* one.
 
 ### Status
 
-🐛 **Known. Fix pending** until the next iteration.
+✅ **Fixed.** Verified on iPhone 14 against a Chromecast Ultra: picking
+a tier in the picker and tapping Start now sends that exact bitrate to
+the Jellyfin receiver. Confirmed empirically with multiple consecutive
+casts at different tiers (1.5 Mbps → ~9 Mbps actual on HDR 4K; 20 Mbps
+→ ~15 Mbps actual capped by output resolution).
+
+The fix replaces the SwiftUI `.pickerStyle(.inline)` Picker — which was
+desyncing its visual checkmark from the bound `@State` value — with
+explicit `Button` rows that drive the assignment directly. The
+`asyncAfter(0.4)` timer that gated the native cast dialog was also
+replaced with the sheet's `onDismiss` callback, so the dialog presents
+on the real end-of-animation event instead of guessing. And on session
+end, `CastManager.pendingMaxBitrate` / `pendingAudioStreamIndex` are
+reset so a cancelled or interrupted session can't leak stale values
+into the next attempt.
+
+If you are still on a v1.0.0 / v1.1.0 IPA, the workaround above still
+applies. Upgrade to v1.2.0 or later to stop needing it.
+
+---
+
+## 🔵 Changing the picker tier between two consecutive casts of the same item may not take effect
+
+**Confirmed in:** v1.2.0.
+
+### Symptom (what we observe)
+
+You cast a movie at one tier (say 1.5 Mbps). It works. You stop the
+cast, then cast the **same movie again** shortly after with a
+**different tier** (say 20 Mbps). On the server, the FFmpeg transcode
+keeps using a bitrate consistent with the **original** cap (~9 Mbps),
+not the new one.
+
+The FFmpeg log file for the second cast shows:
+
+- A high `-start_number` value (e.g. 237) instead of `0`.
+- A `-b:v` consistent with the original cap, not the new one.
+
+### What we know (empirically)
+
+- Hitting **"Play from Beginning"** on the item in Jellyfin's own UI,
+  before tapping Cast in Swiftfin, produces a log with
+  `-start_number 0` and `-b:v` matching the **new** cap. Verified
+  with both 1.5 Mbps (→ ~9 Mbps actual) and 20 Mbps (→ ~15 Mbps actual,
+  output-resolution-limited) picks.
+- Casting a **different** item works correctly on the first attempt:
+  switching from one movie to another with a 1.5 Mbps pick produced
+  ~8.4 Mbps actual with `-start_number 0`. So the picker → app →
+  receiver chain functions as expected for items that have not been
+  recently cast.
+- This fork's code **does construct and send** a new `maxBitrate`
+  value in the `PlayNow` JSON payload on every cast attempt (verified
+  by reading our own source).
+
+### What we do NOT know
+
+- Whether the new cap is being ignored because the Jellyfin server
+  reuses an existing transcode session, because the Cast receiver
+  doesn't request a new one, or for some other reason.
+- Whether there is a time-based expiry, and if so what it is or how
+  (or if) it can be configured.
+- Whether other Jellyfin Cast clients (e.g. `jellyfin-web`) exhibit
+  the same behavior in the same setup.
+- Whether an explicit Stop sent on the custom Cast namespace before
+  the new `PlayNow` would force a fresh transcode. This has not been
+  tested.
+
+### Workarounds (empirically verified to work)
+
+- **In Jellyfin, hit "Play from Beginning"** from the item's context
+  menu before casting again.
+- **In Jellyfin Dashboard → Activity → Active Transcoding**, kill any
+  existing transcode for that item before casting again.
+- **Cast a different item first**, then come back to the original.
+
+### Status
+
+🟡 **Reproducible, root cause not pinned down.** A future fork
+iteration may experiment with sending an explicit Stop on the custom
+Cast namespace (or some other instruction to the receiver / server) to
+force a fresh transcode on every cast attempt. Nothing tested yet,
+nothing promised.
 
 ---
 
