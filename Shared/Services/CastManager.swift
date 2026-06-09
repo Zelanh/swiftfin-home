@@ -107,6 +107,13 @@ final class CastManager: NSObject, ObservableObject {
 
         // Audio: picker override takes priority over the item's local selection.
         let resolvedAudioIndex = pendingAudioStreamIndex ?? item.selectedAudioStreamIndex ?? -1
+        let requestedMaxBitrate = pendingMaxBitrate > 0 ? pendingMaxBitrate : nil
+        let castDeviceProfile = DeviceProfile.build(
+            for: .swiftfin,
+            compatibilityMode: .auto,
+            maxBitrate: requestedMaxBitrate
+        )
+        let castDeviceProfileJSON = try? Self.encodeToDictionary(castDeviceProfile)
 
         var options: [String: Any] = [
             "items": [baseItemJSON],
@@ -114,6 +121,11 @@ final class CastManager: NSObject, ObservableObject {
             "mediaSourceId": item.mediaSource.id ?? "",
             "audioStreamIndex": resolvedAudioIndex,
             "subtitleStreamIndex": item.selectedSubtitleStreamIndex ?? -1,
+            // Path-B experiment: keep the Jellyfin receiver PlayNow protocol,
+            // but send a Swiftfin-built DeviceProfile alongside maxBitrate.
+            // If the receiver honours this, the picker value becomes a real
+            // profile cap instead of only a receiver-side quality hint.
+            "deviceProfile": castDeviceProfileJSON ?? [:],
             // Generate a fresh UUID per cast attempt. Empirically, the Jellyfin
             // server appears to key its active-transcode cache by playback
             // session, so omitting this lets the server reuse a previous
@@ -131,6 +143,7 @@ final class CastManager: NSObject, ObservableObject {
         // Sending 0 would tell the receiver "force 0 bps" — we want "no cap".
         if pendingMaxBitrate > 0 {
             options["maxBitrate"] = pendingMaxBitrate
+            options["maxStreamingBitrate"] = pendingMaxBitrate
         }
 
         let message = baseMessage(
