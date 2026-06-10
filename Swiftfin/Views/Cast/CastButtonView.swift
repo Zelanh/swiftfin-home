@@ -94,7 +94,7 @@ struct CastButtonView: View {
                 CastQualityPickerView(
                     item: item,
                     onConfirm: { bitrate, audioIndex in
-                        castManager.pendingMaxBitrate = bitrate
+                        castManager.pendingBitrate = bitrate
                         castManager.pendingAudioStreamIndex = audioIndex
                         // Latch the intent; the actual cast-dialog
                         // presentation happens from the sheet's

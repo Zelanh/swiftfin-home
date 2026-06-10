@@ -22,11 +22,21 @@ extension Container {
 
 extension Defaults.Keys {
 
-    /// The user's preferred maximum bitrate (in bits/sec) when streaming to a Cast device.
-    /// `0` means no cap (server / receiver default).
-    /// Default: 5 Mbps — a sane balance for Chromecast Ultra over a typical home WiFi.
-    static var castMaxBitrate: Key<Int> {
-        Key("castMaxBitrate", default: 5_000_000)
+    /// The user's preferred bitrate tier when streaming to a Cast device.
+    ///
+    /// Uses Swiftfin's own `PlaybackBitrate` enum so the Cast picker exposes
+    /// exactly the same tiers (with the same localized labels) as the global
+    /// Settings → Playback Quality picker. `.auto` triggers a network speed
+    /// test on the next cast, just like the local-playback path.
+    ///
+    /// Acts as a per-Cast override on top of
+    /// `Defaults[.VideoPlayer.Playback.appMaximumBitrate]`. When the user opens
+    /// the Cast quality picker and confirms a tier, that value is what's
+    /// fed into `MediaPlayerItem.build(requestedBitrate:…)` so the
+    /// Transcoding URL Jellyfin generates has *our* cap baked in instead of
+    /// whatever was selected globally for local playback.
+    static var castBitrate: Key<PlaybackBitrate> {
+        Key("castBitrate", default: .auto)
     }
 }
 
@@ -56,9 +66,10 @@ final class CastManager: NSObject, ObservableObject {
     /// Recreated each time a session starts/resumes; cleared when it ends.
     private var jellyfinChannel: GCKGenericChannel?
 
-    /// Cap (bits/sec) requested from the receiver for the next `load`. `0` means
-    /// "no cap" (server picks). Set by the quality picker just before casting.
-    var pendingMaxBitrate: Int = 0
+    /// Bitrate tier requested from the Cast quality picker for the next `load`.
+    /// `nil` means "fall back to `Defaults[.VideoPlayer.Playback.appMaximumBitrate]`"
+    /// — the global Settings tier. Set by the Cast quality picker just before casting.
+    var pendingBitrate: PlaybackBitrate? = nil
 
     /// Optional override for the audio stream index used by the next `load`.
     /// `nil` means "use whatever is selected on the MediaPlayerItem". Set by
@@ -82,43 +93,87 @@ final class CastManager: NSObject, ObservableObject {
 
     /// Send a `PlayNow` command to the Jellyfin receiver via its custom namespace.
     ///
-    /// The receiver uses this message to construct its own playback URL on the
-    /// Jellyfin server (from `serverAddress` + `accessToken` + item `Id`), so we
-    /// don't need to send a stream URL ourselves.
+    /// Before sending, the `MediaPlayerItem` we received from the local-playback
+    /// flow is **rebuilt** with our Cast picker's bitrate tier (and the user's
+    /// global compatibility-mode setting). That second `getPostedPlaybackInfo`
+    /// call returns a fresh `MediaSource` whose `TranscodingUrl` has *our* cap
+    /// baked in by Jellyfin itself, plus a fresh `playSessionID`. We inject the
+    /// new `MediaSource` into the `BaseItemDto` we send so the receiver, when it
+    /// inspects `items[0].MediaSources[*]`, finds the URL we want it to use
+    /// instead of the one Jellyfin generated for local playback with the
+    /// global `appMaximumBitrate`.
     ///
-    /// @MainActor because we read main-actor-isolated properties on `MediaPlayerItem`
-    /// (`selectedAudioStreamIndex`, `selectedSubtitleStreamIndex`).
+    /// This solves three things at once:
+    /// 1. The Cast quality picker actually changes the resulting bitrate (it
+    ///    was previously masked by `appMaximumBitrate`, which is what Jellyfin
+    ///    sees when the item is built for local playback).
+    /// 2. The user's compatibility-mode and custom-device-profile settings
+    ///    from Settings → Playback Quality propagate to Cast.
+    /// 3. The "server reuses a previous transcode session" issue we hit in
+    ///    earlier iterations is dissolved organically: every cast attempt
+    ///    triggers a new `getPostedPlaybackInfo`, which yields a new
+    ///    `playSessionID` and a new transcoder process server-side.
+    ///
+    /// @MainActor because we read main-actor-isolated properties on `MediaPlayerItem`.
     @MainActor
     func load(item: MediaPlayerItem) {
+        Task { await self.performLoad(item: item) }
+    }
+
+    /// Async core of `load(item:)`. Kept private so the public surface stays
+    /// callable from synchronous SwiftUI contexts (`.onChange` etc.).
+    @MainActor
+    private func performLoad(item: MediaPlayerItem) async {
         guard let userSession = Container.shared.currentUserSession() else { return }
         guard let channel = jellyfinChannel else { return }
 
+        // Rebuild the MediaPlayerItem so Jellyfin produces a TranscodingUrl
+        // that respects the Cast picker tier (or, if the picker is `nil`,
+        // the global `appMaximumBitrate`) AND the user's global compatibility
+        // mode. If the rebuild fails (offline, server hiccup, etc.) we fall
+        // back to the original item so casting still works degraded rather
+        // than not at all.
+        let castItem: MediaPlayerItem = await rebuildItemForCast(from: item) ?? item
+
         // Jellyfin uses ticks (100ns units): 1 second = 10,000,000 ticks.
-        let startSeconds = item.baseItem.startSeconds?.seconds ?? 0
+        let startSeconds = castItem.baseItem.startSeconds?.seconds ?? 0
         let resumeOffset = Double(Defaults[.VideoPlayer.resumeOffset])
         let adjustedSeconds = max(0, startSeconds - resumeOffset)
         let startPositionTicks = Int64(adjustedSeconds * 10_000_000)
+
+        // Inject the rebuilt `MediaSource` into the `BaseItemDto` we send.
+        // The receiver routes playback off `items[0].MediaSources[*]` and
+        // its `TranscodingUrl`; if we shipped the original list it would
+        // find the URL built for local playback at `appMaximumBitrate` and
+        // our rebuild would be wasted work.
+        var castBaseItem = castItem.baseItem
+        castBaseItem.mediaSources = [castItem.mediaSource]
 
         // Re-encode the BaseItemDto back to its server JSON shape. JellyfinAPI's
         // CodingKeys map Swift camelCase ↔ server PascalCase, so a round-trip
         // through JSONEncoder + JSONSerialization gives us a [String: Any] in
         // the exact format the receiver expects in `options.items[]`.
-        guard let baseItemJSON = try? Self.encodeToDictionary(item.baseItem) else { return }
+        guard let baseItemJSON = try? Self.encodeToDictionary(castBaseItem) else { return }
 
         // Audio: picker override takes priority over the item's local selection.
-        let resolvedAudioIndex = pendingAudioStreamIndex ?? item.selectedAudioStreamIndex ?? -1
+        let resolvedAudioIndex = pendingAudioStreamIndex ?? castItem.selectedAudioStreamIndex ?? -1
 
         var options: [String: Any] = [
             "items": [baseItemJSON],
             "startPositionTicks": startPositionTicks,
-            "mediaSourceId": item.mediaSource.id ?? "",
+            "mediaSourceId": castItem.mediaSource.id ?? "",
             "audioStreamIndex": resolvedAudioIndex,
-            "subtitleStreamIndex": item.selectedSubtitleStreamIndex ?? -1,
+            "subtitleStreamIndex": castItem.selectedSubtitleStreamIndex ?? -1,
         ]
-        // Only include `maxBitrate` when the user explicitly chose a cap.
-        // Sending 0 would tell the receiver "force 0 bps" — we want "no cap".
-        if pendingMaxBitrate > 0 {
-            options["maxBitrate"] = pendingMaxBitrate
+
+        // Belt-and-braces hint: also include `maxBitrate` in options. The
+        // primary control is the rebuilt `TranscodingUrl` above; this line
+        // is just in case the receiver consults `options.maxBitrate` as
+        // well. Skipped for `.auto` (where we'd need to re-run the speed
+        // test that `build()` already ran) and for `nil` (use the global
+        // default — already encoded in the URL).
+        if let bitrate = pendingBitrate, bitrate != .auto, bitrate.rawValue > 0 {
+            options["maxBitrate"] = bitrate.rawValue
         }
 
         let message = baseMessage(
@@ -132,6 +187,26 @@ final class CastManager: NSObject, ObservableObject {
         currentSession?.remoteMediaClient?.add(self)
 
         sendCustomMessage(message, on: channel)
+    }
+
+    /// Reconstruct the `MediaPlayerItem` for Cast using our picker's bitrate
+    /// tier and the user's global compatibility mode. Returns `nil` on
+    /// failure so the caller can fall back to the original item.
+    @MainActor
+    private func rebuildItemForCast(from item: MediaPlayerItem) async -> MediaPlayerItem? {
+        let requested = pendingBitrate ?? Defaults[.VideoPlayer.Playback.appMaximumBitrate]
+        let compatibility = Defaults[.VideoPlayer.Playback.compatibilityMode]
+        do {
+            return try await MediaPlayerItem.build(
+                for: item.baseItem,
+                mediaSource: item.mediaSource,
+                videoPlayerType: .swiftfin,
+                requestedBitrate: requested,
+                compatibilityMode: compatibility
+            )
+        } catch {
+            return nil
+        }
     }
 
     /// Send the `Identify` handshake to the receiver immediately after the
