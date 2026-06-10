@@ -122,71 +122,56 @@ final class CastManager: NSObject, ObservableObject {
 
     /// Async core of `load(item:)`. Kept private so the public surface stays
     /// callable from synchronous SwiftUI contexts (`.onChange` etc.).
+    ///
+    /// Mirrors the native local-play model instead of the receiver's custom
+    /// PlayNow protocol: we rebuild the `MediaPlayerItem` exactly like
+    /// Swiftfin does when the user taps Play locally (same
+    /// `getPostedPlaybackInfo` negotiation, same `TranscodingUrl`-or-direct
+    /// stream URL), then hand that URL to the Chromecast via the standard
+    /// CAF `loadMedia`. The receiver can't reinterpret or override a direct
+    /// URL the way it did with the PlayNow JSON — it just plays it, so the
+    /// picker tier (or the global Settings tier) is finally authoritative.
     @MainActor
     private func performLoad(item: MediaPlayerItem) async {
-        guard let userSession = Container.shared.currentUserSession() else { return }
-        guard let channel = jellyfinChannel else { return }
+        guard let remoteMediaClient = currentSession?.remoteMediaClient else { return }
 
-        // Rebuild the MediaPlayerItem so Jellyfin produces a TranscodingUrl
+        // Rebuild the MediaPlayerItem so Jellyfin produces a stream URL
         // that respects the Cast picker tier (or, if the picker is `nil`,
         // the global `appMaximumBitrate`) AND the user's global compatibility
-        // mode. If the rebuild fails (offline, server hiccup, etc.) we fall
-        // back to the original item so casting still works degraded rather
-        // than not at all.
+        // mode — the exact same call path local playback uses. If the rebuild
+        // fails (offline, server hiccup, etc.) we fall back to the original
+        // item so casting still works degraded rather than not at all.
         let castItem: MediaPlayerItem = await rebuildItemForCast(from: item) ?? item
 
-        // Jellyfin uses ticks (100ns units): 1 second = 10,000,000 ticks.
         let startSeconds = castItem.baseItem.startSeconds?.seconds ?? 0
         let resumeOffset = Double(Defaults[.VideoPlayer.resumeOffset])
         let adjustedSeconds = max(0, startSeconds - resumeOffset)
-        let startPositionTicks = Int64(adjustedSeconds * 10_000_000)
 
-        // Inject the rebuilt `MediaSource` into the `BaseItemDto` we send.
-        // The receiver routes playback off `items[0].MediaSources[*]` and
-        // its `TranscodingUrl`; if we shipped the original list it would
-        // find the URL built for local playback at `appMaximumBitrate` and
-        // our rebuild would be wasted work.
-        var castBaseItem = castItem.baseItem
-        castBaseItem.mediaSources = [castItem.mediaSource]
-
-        // Re-encode the BaseItemDto back to its server JSON shape. JellyfinAPI's
-        // CodingKeys map Swift camelCase ↔ server PascalCase, so a round-trip
-        // through JSONEncoder + JSONSerialization gives us a [String: Any] in
-        // the exact format the receiver expects in `options.items[]`.
-        guard let baseItemJSON = try? Self.encodeToDictionary(castBaseItem) else { return }
-
-        // Audio: picker override takes priority over the item's local selection.
-        let resolvedAudioIndex = pendingAudioStreamIndex ?? castItem.selectedAudioStreamIndex ?? -1
-
-        var options: [String: Any] = [
-            "items": [baseItemJSON],
-            "startPositionTicks": startPositionTicks,
-            "mediaSourceId": castItem.mediaSource.id ?? "",
-            "audioStreamIndex": resolvedAudioIndex,
-            "subtitleStreamIndex": castItem.selectedSubtitleStreamIndex ?? -1,
-        ]
-
-        // Belt-and-braces hint: also include `maxBitrate` in options. The
-        // primary control is the rebuilt `TranscodingUrl` above; this line
-        // is just in case the receiver consults `options.maxBitrate` as
-        // well. Skipped for `.auto` (where we'd need to re-run the speed
-        // test that `build()` already ran) and for `nil` (use the global
-        // default — already encoded in the URL).
-        if let bitrate = pendingBitrate, bitrate != .auto, bitrate.rawValue > 0 {
-            options["maxBitrate"] = bitrate.rawValue
+        let builder = GCKMediaInformationBuilder(contentURL: castItem.url)
+        builder.contentID = castItem.baseItem.id ?? castItem.url.absoluteString
+        builder.streamType = .buffered
+        // Transcodes are HLS playlists; direct streams are served as their
+        // container (mp4 covers the overwhelming majority — the Chromecast
+        // sniffs the actual container from the stream anyway).
+        builder.contentType = castItem.mediaSource.transcodingURL != nil
+            ? "application/x-mpegURL"
+            : "video/mp4"
+        if let runTimeTicks = castItem.baseItem.runTimeTicks {
+            builder.streamDuration = TimeInterval(runTimeTicks) / 10_000_000
         }
 
-        let message = baseMessage(
-            command: "PlayNow",
-            userSession: userSession,
-            options: options
-        )
+        let metadata = GCKMediaMetadata(metadataType: .movie)
+        metadata.setString(castItem.baseItem.name ?? "", forKey: kGCKMetadataKeyTitle)
+        builder.metadata = metadata
+
+        let loadOptions = GCKMediaLoadOptions()
+        loadOptions.playPosition = adjustedSeconds
 
         // Listen for media status updates so the iOS UI (position, play/pause state)
-        // stays in sync with whatever the receiver decides to play.
-        currentSession?.remoteMediaClient?.add(self)
+        // stays in sync with the receiver.
+        remoteMediaClient.add(self)
 
-        sendCustomMessage(message, on: channel)
+        remoteMediaClient.loadMedia(builder.build(), with: loadOptions)
     }
 
     /// Reconstruct the `MediaPlayerItem` for Cast using our picker's bitrate
