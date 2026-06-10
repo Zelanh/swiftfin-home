@@ -16,7 +16,16 @@ class AppDelegate: NSObject, UIApplicationDelegate {
         _ application: UIApplication,
         didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil
     ) -> Bool {
-        let castOptions = GCKCastOptions(receiverApplicationID: CastManager.jellyfinReceiverAppID)
+        // Default Google media receiver instead of the Jellyfin receiver
+        // (F007D354). The Jellyfin receiver only acts on its own custom
+        // PlayNow protocol and ignores standard CAF loadMedia — and when
+        // driven through PlayNow it renegotiates the stream with its own
+        // DeviceProfile, discarding the bitrate the user picked. The default
+        // receiver simply plays the URL we negotiated with Jellyfin (the
+        // same one local playback would use), making our quality picker
+        // authoritative. Trade-off: the TV shows Google's standard player
+        // UI instead of the Jellyfin-branded idle screen.
+        let castOptions = GCKCastOptions(receiverApplicationID: kGCKDefaultMediaReceiverApplicationID)
         castOptions.physicalVolumeButtonsWillControlDeviceVolume = true
         GCKCastContext.setSharedInstanceWith(castOptions)
         GCKCastContext.sharedInstance().useDefaultExpandedMediaControls = true
