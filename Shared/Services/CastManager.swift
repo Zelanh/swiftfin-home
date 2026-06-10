@@ -59,6 +59,18 @@ final class CastManager: NSObject, ObservableObject {
     @Published private(set) var castPlayerState: GCKMediaPlayerState = .idle
     @Published private(set) var currentCastPosition: TimeInterval = 0
 
+    /// Last error from the cast-load flow, surfaced to the UI (no console
+    /// access on sideloaded builds). `nil` when the last load succeeded.
+    @Published var lastLoadError: String? = nil
+
+    /// Strong reference to the in-flight load request — its delegate is only
+    /// called while the request is alive.
+    private var activeLoadRequest: GCKRequest?
+
+    func clearLoadError() {
+        lastLoadError = nil
+    }
+
     /// Position at the moment a Cast session ended, used to resume local playback.
     private(set) var castEndedPosition: Duration? = nil
 
@@ -124,85 +136,65 @@ final class CastManager: NSObject, ObservableObject {
     /// callable from synchronous SwiftUI contexts (`.onChange` etc.).
     @MainActor
     private func performLoad(item: MediaPlayerItem) async {
-        guard let userSession = Container.shared.currentUserSession() else { return }
-        guard let channel = jellyfinChannel else { return }
+        guard let remoteMediaClient = currentSession?.remoteMediaClient else {
+            lastLoadError = "Cast: no active session when load was attempted"
+            return
+        }
 
-        // Rebuild the MediaPlayerItem so Jellyfin produces a TranscodingUrl
-        // that respects the Cast picker tier (or, if the picker is `nil`,
-        // the global `appMaximumBitrate`) AND the user's global compatibility
-        // mode. If the rebuild fails (offline, server hiccup, etc.) we fall
-        // back to the original item so casting still works degraded rather
-        // than not at all.
-        let castItem: MediaPlayerItem = await rebuildItemForCast(from: item) ?? item
+        // Rebuild the MediaPlayerItem with the Chromecast DeviceProfile and
+        // the picker's bitrate tier — the exact same negotiation local play
+        // does (`getPostedPlaybackInfo`), just with a receiver-appropriate
+        // profile (h264 + stereo AAC + MPEG-TS HLS) instead of the local
+        // player's. Jellyfin bakes the cap into the returned stream URL.
+        guard let castItem = await rebuildItemForCast(from: item) else {
+            lastLoadError = "Cast: failed to negotiate a Chromecast stream with the server"
+            return
+        }
 
-        // Jellyfin uses ticks (100ns units): 1 second = 10,000,000 ticks.
         let startSeconds = castItem.baseItem.startSeconds?.seconds ?? 0
         let resumeOffset = Double(Defaults[.VideoPlayer.resumeOffset])
         let adjustedSeconds = max(0, startSeconds - resumeOffset)
-        let startPositionTicks = Int64(adjustedSeconds * 10_000_000)
 
-        // Inject the rebuilt `MediaSource` into the `BaseItemDto` we send.
-        // The receiver routes playback off `items[0].MediaSources[*]` and
-        // its `TranscodingUrl`; if we shipped the original list it would
-        // find the URL built for local playback at `appMaximumBitrate` and
-        // our rebuild would be wasted work.
-        var castBaseItem = castItem.baseItem
-        castBaseItem.mediaSources = [castItem.mediaSource]
-
-        // Re-encode the BaseItemDto back to its server JSON shape. JellyfinAPI's
-        // CodingKeys map Swift camelCase ↔ server PascalCase, so a round-trip
-        // through JSONEncoder + JSONSerialization gives us a [String: Any] in
-        // the exact format the receiver expects in `options.items[]`.
-        guard let baseItemJSON = try? Self.encodeToDictionary(castBaseItem) else { return }
-
-        // Audio: picker override takes priority over the item's local selection.
-        let resolvedAudioIndex = pendingAudioStreamIndex ?? castItem.selectedAudioStreamIndex ?? -1
-
-        var options: [String: Any] = [
-            "items": [baseItemJSON],
-            "startPositionTicks": startPositionTicks,
-            "mediaSourceId": castItem.mediaSource.id ?? "",
-            "audioStreamIndex": resolvedAudioIndex,
-            "subtitleStreamIndex": castItem.selectedSubtitleStreamIndex ?? -1,
-        ]
-
-        // Belt-and-braces hint: also include `maxBitrate` in options. The
-        // primary control is the rebuilt `TranscodingUrl` above; this line
-        // is just in case the receiver consults `options.maxBitrate` as
-        // well. Skipped for `.auto` (where we'd need to re-run the speed
-        // test that `build()` already ran) and for `nil` (use the global
-        // default — already encoded in the URL).
-        if let bitrate = pendingBitrate, bitrate != .auto, bitrate.rawValue > 0 {
-            options["maxBitrate"] = bitrate.rawValue
+        let builder = GCKMediaInformationBuilder(contentURL: castItem.url)
+        builder.contentID = castItem.baseItem.id ?? castItem.url.absoluteString
+        builder.streamType = .buffered
+        // The Chromecast profile transcodes to HLS with MPEG-TS segments;
+        // direct play (mp4 + h264 + aac) is the only other possibility.
+        builder.contentType = castItem.mediaSource.transcodingURL != nil
+            ? "application/x-mpegURL"
+            : "video/mp4"
+        if let runTimeTicks = castItem.baseItem.runTimeTicks {
+            builder.streamDuration = TimeInterval(runTimeTicks) / 10_000_000
         }
 
-        let message = baseMessage(
-            command: "PlayNow",
-            userSession: userSession,
-            options: options
-        )
+        let metadata = GCKMediaMetadata(metadataType: .movie)
+        metadata.setString(castItem.baseItem.name ?? "", forKey: kGCKMetadataKeyTitle)
+        builder.metadata = metadata
+
+        let loadOptions = GCKMediaLoadOptions()
+        loadOptions.playPosition = adjustedSeconds
 
         // Listen for media status updates so the iOS UI (position, play/pause state)
-        // stays in sync with whatever the receiver decides to play.
-        currentSession?.remoteMediaClient?.add(self)
+        // stays in sync with the receiver.
+        remoteMediaClient.add(self)
 
-        sendCustomMessage(message, on: channel)
+        let request = remoteMediaClient.loadMedia(builder.build(), with: loadOptions)
+        request.delegate = self
+        activeLoadRequest = request
     }
 
-    /// Reconstruct the `MediaPlayerItem` for Cast using our picker's bitrate
-    /// tier and the user's global compatibility mode. Returns `nil` on
-    /// failure so the caller can fall back to the original item.
+    /// Reconstruct the `MediaPlayerItem` for Cast: Chromecast DeviceProfile +
+    /// the picker's bitrate tier (falling back to the global Settings tier).
+    /// Returns `nil` on failure.
     @MainActor
     private func rebuildItemForCast(from item: MediaPlayerItem) async -> MediaPlayerItem? {
         let requested = pendingBitrate ?? Defaults[.VideoPlayer.Playback.appMaximumBitrate]
-        let compatibility = Defaults[.VideoPlayer.Playback.compatibilityMode]
         do {
             return try await MediaPlayerItem.build(
                 for: item.baseItem,
                 mediaSource: item.mediaSource,
-                videoPlayerType: .swiftfin,
                 requestedBitrate: requested,
-                compatibilityMode: compatibility
+                customDeviceProfile: .buildChromecast()
             )
         } catch {
             return nil
@@ -391,6 +383,32 @@ extension CastManager: GCKRemoteMediaClientListener {
         DispatchQueue.main.async {
             self.castPlayerState = mediaStatus?.playerState ?? .idle
             self.currentCastPosition = mediaStatus?.streamPosition ?? self.currentCastPosition
+        }
+    }
+}
+
+// MARK: - GCKRequestDelegate
+
+extension CastManager: GCKRequestDelegate {
+
+    func requestDidComplete(_ request: GCKRequest) {
+        DispatchQueue.main.async {
+            self.lastLoadError = nil
+            self.activeLoadRequest = nil
+        }
+    }
+
+    func request(_ request: GCKRequest, didFailWithError error: GCKError) {
+        DispatchQueue.main.async {
+            self.lastLoadError = "Cast load failed: \(error.localizedDescription) (code \(error.code))"
+            self.activeLoadRequest = nil
+        }
+    }
+
+    func request(_ request: GCKRequest, didAbortWith abortReason: GCKRequestAbortReason) {
+        DispatchQueue.main.async {
+            self.lastLoadError = "Cast load aborted (reason \(abortReason.rawValue))"
+            self.activeLoadRequest = nil
         }
     }
 }
