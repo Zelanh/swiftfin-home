@@ -58,7 +58,7 @@ Upgrade to v1.1.0 or later to stop needing it.
 
 ## 🟢 The quality picker sometimes sends a different value than what is visually selected
 
-**Affected versions:** v1.0.0, v1.1.0. **Fixed in:** v1.2.0 (and current `main`).
+**Affected versions:** v1.0.0, v1.1.0, v1.2.0 (partial). **Fully fixed in:** v1.2.1 (and current `main`).
 
 ### Symptom (v1.0.0 / v1.1.0)
 
@@ -102,32 +102,48 @@ selection — you have to tap a *different* one.
 
 ### Status
 
-✅ **Fixed.** Verified on iPhone 14 against a Chromecast Ultra: picking
-a tier in the picker and tapping Start now sends that exact bitrate to
-the Jellyfin receiver. Confirmed empirically with multiple consecutive
-casts at different tiers (1.5 Mbps → ~9 Mbps actual on HDR 4K; 20 Mbps
-→ ~15 Mbps actual capped by output resolution).
+✅ **Two-stage fix. Both stages now in `main`.**
 
-The fix replaces the SwiftUI `.pickerStyle(.inline)` Picker — which was
-desyncing its visual checkmark from the bound `@State` value — with
-explicit `Button` rows that drive the assignment directly. The
-`asyncAfter(0.4)` timer that gated the native cast dialog was also
-replaced with the sheet's `onDismiss` callback, so the dialog presents
-on the real end-of-animation event instead of guessing. And on session
-end, `CastManager.pendingMaxBitrate` / `pendingAudioStreamIndex` are
-reset so a cancelled or interrupted session can't leak stale values
-into the next attempt.
+**Stage 1 — v1.2.0 — visual desync corrected.** The SwiftUI
+`.pickerStyle(.inline)` Picker was replaced with explicit `Button` rows
+so the visible checkmark and the bound `@State` value can no longer
+disagree. The `asyncAfter(0.4)` before the native cast dialog was
+replaced with the sheet's `onDismiss` callback so dialog presentation
+waits on the real animation-end event. The picker's `pending*` overrides
+on `CastManager` are cleared at session end so a cancelled or
+interrupted session can't leak stale values into the next attempt.
 
-If you are still on a v1.0.0 / v1.1.0 IPA, the workaround above still
-applies. Upgrade to v1.2.0 or later to stop needing it.
+After v1.2.0 shipped, follow-up testing surfaced that the visual fix
+alone wasn't enough: the resulting transcode bitrate on the server
+still didn't reliably match the Cast picker selection.
+
+**Stage 2 — v1.2.1 — transcode bitrate now actually follows the
+picker.** Root cause: the `MediaPlayerItem` being cast had already
+been built for *local* playback with
+`Defaults[.VideoPlayer.Playback.appMaximumBitrate]` baked into its
+`TranscodingUrl` by Jellyfin. So even when the Cast picker correctly
+sent its value alongside, the receiver was following the URL minted
+with the global Settings cap, not ours.
+
+v1.2.1 rebuilds the `MediaPlayerItem` inside `CastManager.load` using
+the Cast picker's `PlaybackBitrate` tier and the user's global
+`compatibilityMode` setting, then injects the resulting
+`MediaSource` (with a fresh `TranscodingUrl` containing *our* cap)
+into the `BaseItemDto` sent to the receiver. As a side benefit, every
+cast attempt now triggers a fresh `getPostedPlaybackInfo` server-side
+and therefore a fresh `PlaySessionID` — see the next entry for what
+that resolves.
+
+If you are still on a v1.0.0 / v1.1.0 / v1.2.0 IPA, the workaround
+above still applies. Upgrade to v1.2.1 or later to stop needing it.
 
 ---
 
-## 🔵 Changing the picker tier between two consecutive casts of the same item may not take effect
+## 🟢 Changing the picker tier between two consecutive casts of the same item may not take effect
 
-**Confirmed in:** v1.2.0.
+**Affected versions:** v1.0.0–v1.2.0. **Fixed in:** v1.2.1 (and current `main`).
 
-### Symptom (what we observe)
+### Symptom (v1.0.0–v1.2.0)
 
 You cast a movie at one tier (say 1.5 Mbps). It works. You stop the
 cast, then cast the **same movie again** shortly after with a
@@ -140,50 +156,32 @@ The FFmpeg log file for the second cast shows:
 - A high `-start_number` value (e.g. 237) instead of `0`.
 - A `-b:v` consistent with the original cap, not the new one.
 
-### What we know (empirically)
-
-- Hitting **"Play from Beginning"** on the item in Jellyfin's own UI,
-  before tapping Cast in Swiftfin, produces a log with
-  `-start_number 0` and `-b:v` matching the **new** cap. Verified
-  with both 1.5 Mbps (→ ~9 Mbps actual) and 20 Mbps (→ ~15 Mbps actual,
-  output-resolution-limited) picks.
-- Casting a **different** item works correctly on the first attempt:
-  switching from one movie to another with a 1.5 Mbps pick produced
-  ~8.4 Mbps actual with `-start_number 0`. So the picker → app →
-  receiver chain functions as expected for items that have not been
-  recently cast.
-- This fork's code **does construct and send** a new `maxBitrate`
-  value in the `PlayNow` JSON payload on every cast attempt (verified
-  by reading our own source).
-
-### What we do NOT know
-
-- Whether the new cap is being ignored because the Jellyfin server
-  reuses an existing transcode session, because the Cast receiver
-  doesn't request a new one, or for some other reason.
-- Whether there is a time-based expiry, and if so what it is or how
-  (or if) it can be configured.
-- Whether other Jellyfin Cast clients (e.g. `jellyfin-web`) exhibit
-  the same behavior in the same setup.
-- Whether an explicit Stop sent on the custom Cast namespace before
-  the new `PlayNow` would force a fresh transcode. This has not been
-  tested.
-
-### Workarounds (empirically verified to work)
+### Workaround for v1.0.0–v1.2.0 (empirically verified)
 
 - **In Jellyfin, hit "Play from Beginning"** from the item's context
-  menu before casting again.
-- **In Jellyfin Dashboard → Activity → Active Transcoding**, kill any
-  existing transcode for that item before casting again.
-- **Cast a different item first**, then come back to the original.
+  menu before tapping Cast in Swiftfin. This generates a fresh
+  transcode session that respects the current picker tier.
 
 ### Status
 
-🟡 **Reproducible, root cause not pinned down.** A future fork
-iteration may experiment with sending an explicit Stop on the custom
-Cast namespace (or some other instruction to the receiver / server) to
-force a fresh transcode on every cast attempt. Nothing tested yet,
-nothing promised.
+✅ **Fixed in v1.2.1.** The original symptom was a consequence of how
+the original `CastManager` worked rather than any server-side caching:
+because the `MediaPlayerItem` was built once for local playback and
+then handed to `CastManager.load` as-is, all subsequent cast attempts
+of the same item shared the same `TranscodingUrl` (with the same
+`PlaySessionID` and the same cap baked in) — the receiver was simply
+following that URL.
+
+v1.2.1 rebuilds the `MediaPlayerItem` from scratch inside
+`CastManager.load` via `MediaPlayerItem.build`, which calls
+`getPostedPlaybackInfo` server-side on every cast. Each call yields a
+fresh `PlaySessionID` and a transcoder freshly spun up with the chosen
+cap. Re-casting the same item with a different picker tier now works
+on the first attempt, with no need for "Play from Beginning" or any
+other manual cache-invalidation step.
+
+If you are still on a v1.0.0–v1.2.0 IPA, the workaround above still
+applies. Upgrade to v1.2.1 or later to stop needing it.
 
 ---
 

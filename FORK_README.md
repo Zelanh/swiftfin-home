@@ -187,7 +187,7 @@ CastButtonView shows CastQualityPickerView (sheet)
 User picks audio + bitrate, confirms
         |
         v
-CastManager.pendingMaxBitrate / pendingAudioStreamIndex set
+CastManager.pendingBitrate / pendingAudioStreamIndex set
         |
         v
 GCKCastContext.presentCastDialog() (native device picker)
@@ -217,11 +217,20 @@ VideoPlayer.onChange(of: isSessionActive) swaps manager.proxy to ChromecastMedia
 VideoPlayer pauses local VLC, calls castManager.load(item:)
         |
         v
-CastManager builds the PlayNow JSON, sends via the channel
+CastManager.load() spawns a Task that rebuilds the MediaPlayerItem
+via MediaPlayerItem.build(requestedBitrate: pendingBitrate ?? globalDefault,
+compatibilityMode: userSetting). This triggers a fresh
+getPostedPlaybackInfo server-side -> new PlaySessionID + new MediaSource
+with the picker's cap baked into TranscodingUrl by Jellyfin.
         |
         v
-Jellyfin Chromecast receiver decodes payload, constructs server URL,
-starts playback on the Cast device.
+CastManager injects the rebuilt MediaSource into the BaseItemDto's
+mediaSources, builds the PlayNow JSON, sends via the channel
+        |
+        v
+Jellyfin Chromecast receiver decodes payload, follows the
+TranscodingUrl that already carries our cap, starts playback on the
+Cast device.
         |
         v
 GCKRemoteMediaClient delivers media status updates -> CastManager
@@ -283,14 +292,20 @@ and `jellyfin-web/src/plugins/chromecastPlayer/plugin.js`.
 ```
 
 - `startPositionTicks`: 1 second = 10,000,000 ticks (Jellyfin convention).
-- `items[]`: full `BaseItemDto` as PascalCase JSON. We round-trip through
-  `JSONEncoder` + `JSONSerialization` so `JellyfinAPI`'s CodingKeys
-  produce the right server JSON shape.
-- `maxBitrate`: omitted when set to 0 (sentinel for "no cap"). When
-  present, the receiver interprets it as a quality hint, not a literal
-  cap. Empirically: requesting `1_500_000` produces ~9 Mbps output for
-  HDR 4K sources; requesting `8_000_000` produces ~18 Mbps. The receiver
-  applies its own device profile on top of the hint.
+- `items[]`: full `BaseItemDto` as PascalCase JSON, with its `MediaSources`
+  array replaced by `[castItem.mediaSource]` — the one freshly returned by
+  `getPostedPlaybackInfo` during the per-cast rebuild. This is what
+  actually carries the picker's cap, via the `TranscodingUrl` Jellyfin
+  baked into it. We round-trip through `JSONEncoder` +
+  `JSONSerialization` so `JellyfinAPI`'s CodingKeys produce the right
+  server JSON shape.
+- `mediaSourceId`: matches `items[0].MediaSources[0].Id`.
+- `maxBitrate`: belt-and-braces hint that mirrors the cap already baked
+  into the `TranscodingUrl`. Omitted for `.auto` (where the value was
+  resolved server-side by `getPostedPlaybackInfo`) and for the
+  no-picker-selection case (where the global Settings cap was used).
+  Even when present, the primary control is the `TranscodingUrl`; this
+  field exists in case a future receiver path consults it directly.
 
 ### Quality picker
 
@@ -298,26 +313,25 @@ and `jellyfin-web/src/plugins/chromecastPlayer/plugin.js`.
 
 1. **Audio track** — bound to `selectedAudioIndex: Int?`, tagged with each
    `MediaStream.index` from `item.audioStreams`.
-2. **Max bitrate** — inline picker over a fixed enum of options:
+2. **Max bitrate** — list of `Button` rows over `PlaybackBitrate.allCases`,
+   so the tiers exposed to the user are exactly the ones in Swiftfin's
+   global Settings → Playback Quality picker (`.auto`, `.max`,
+   `.mbps120`, `.mbps80`, …, `.kbps420`), with the same localized
+   labels via `PlaybackBitrate.displayTitle`. `.auto` triggers the same
+   network speed test that local playback uses.
 
-```
-1.5 Mbps
-3 Mbps
-5 Mbps
-8 Mbps
-12 Mbps
-20 Mbps
-Unlimited (0)
-```
-
-The selected bitrate is persisted in `Defaults[.castMaxBitrate]` on
-confirm so the next picker session pre-selects it. The audio override is
-**not** persisted (it's per-cast).
+The selected `PlaybackBitrate` is persisted in `Defaults[.castBitrate]`
+on confirm so the next picker session pre-selects it. The audio
+override is **not** persisted (it's per-cast).
 
 The picker's values are stashed on the `CastManager` singleton's
-`pendingMaxBitrate` and `pendingAudioStreamIndex` properties. The next
-`load(item:)` reads them. They are not reset on session end; they get
-overwritten the next time the picker confirms.
+`pendingBitrate: PlaybackBitrate?` and `pendingAudioStreamIndex`
+properties. The next `load(item:)` reads them — `pendingBitrate` feeds
+into `MediaPlayerItem.build(requestedBitrate:)`, while
+`pendingAudioStreamIndex` overrides the audio index baked into the
+rebuilt item. Both are cleared in `sessionManager(_:didEnd:)` so a
+cancelled or interrupted session can't leak stale values into the next
+cast attempt.
 
 ### Why a custom button instead of `GCKUICastButton`
 
