@@ -141,6 +141,19 @@ final class CastManager: NSObject, ObservableObject {
             return
         }
 
+        // Idempotency: if the receiver is already playing (or paused on /
+        // buffering) this exact item, don't reload it. Some load triggers
+        // don't represent user intent — e.g. SwiftUI republishing state when
+        // the app returns to foreground — and a reload restarts the stream
+        // on the TV. Genuine re-casts always start from an ended session
+        // (mediaStatus idle/nil), so they pass this guard.
+        if let currentID = remoteMediaClient.mediaStatus?.mediaInformation?.contentID,
+           currentID == item.baseItem.id,
+           remoteMediaClient.mediaStatus?.playerState != .idle
+        {
+            return
+        }
+
         // Rebuild the MediaPlayerItem with the Chromecast DeviceProfile and
         // the picker's bitrate tier — the exact same negotiation local play
         // does (`getPostedPlaybackInfo`), just with a receiver-appropriate
@@ -341,9 +354,13 @@ extension CastManager: GCKSessionManagerListener {
     }
 
     func sessionManager(_ sessionManager: GCKSessionManager, didSuspend session: GCKCastSession, with reason: GCKConnectionSuspendReason) {
-        DispatchQueue.main.async {
-            self.isSessionActive = false
-        }
+        // Intentionally NOT flipping `isSessionActive` here. Suspension is
+        // transient — the SDK suspends the socket when the app backgrounds
+        // and auto-resumes it on foreground. Treating it as "session over"
+        // made `isSessionActive` flip false→true on every unlock/return,
+        // which VideoPlayer's onChange read as a brand-new session and
+        // re-cast the item from scratch (full reload + buffering bar on the
+        // TV). If the session genuinely dies, `didEnd` fires and cleans up.
     }
 
     func sessionManager(_ sessionManager: GCKSessionManager, didResumeCastSession session: GCKCastSession) {
