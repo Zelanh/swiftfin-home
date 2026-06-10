@@ -59,6 +59,19 @@ final class CastManager: NSObject, ObservableObject {
     @Published private(set) var castPlayerState: GCKMediaPlayerState = .idle
     @Published private(set) var currentCastPosition: TimeInterval = 0
 
+    /// Last error reported by a `loadMedia` request, surfaced to the UI so
+    /// failures are visible on-device (we have no console access on the
+    /// sideloaded build). `nil` when the last load succeeded or none ran yet.
+    @Published private(set) var lastLoadError: String? = nil
+
+    /// Strong reference to the in-flight load request. `loadMedia` returns a
+    /// `GCKRequest` whose delegate is only called while the request is alive.
+    private var activeLoadRequest: GCKRequest?
+
+    func clearLoadError() {
+        lastLoadError = nil
+    }
+
     /// Position at the moment a Cast session ended, used to resume local playback.
     private(set) var castEndedPosition: Duration? = nil
 
@@ -171,7 +184,9 @@ final class CastManager: NSObject, ObservableObject {
         // stays in sync with the receiver.
         remoteMediaClient.add(self)
 
-        remoteMediaClient.loadMedia(builder.build(), with: loadOptions)
+        let request = remoteMediaClient.loadMedia(builder.build(), with: loadOptions)
+        request.delegate = self
+        activeLoadRequest = request
     }
 
     /// Reconstruct the `MediaPlayerItem` for Cast using our picker's bitrate
@@ -376,6 +391,32 @@ extension CastManager: GCKRemoteMediaClientListener {
         DispatchQueue.main.async {
             self.castPlayerState = mediaStatus?.playerState ?? .idle
             self.currentCastPosition = mediaStatus?.streamPosition ?? self.currentCastPosition
+        }
+    }
+}
+
+// MARK: - GCKRequestDelegate
+
+extension CastManager: GCKRequestDelegate {
+
+    func requestDidComplete(_ request: GCKRequest) {
+        DispatchQueue.main.async {
+            self.lastLoadError = nil
+            self.activeLoadRequest = nil
+        }
+    }
+
+    func request(_ request: GCKRequest, didFailWithError error: GCKError) {
+        DispatchQueue.main.async {
+            self.lastLoadError = "Cast load failed: \(error.localizedDescription) (code \(error.code))"
+            self.activeLoadRequest = nil
+        }
+    }
+
+    func request(_ request: GCKRequest, didAbortWith abortReason: GCKRequestAbortReason) {
+        DispatchQueue.main.async {
+            self.lastLoadError = "Cast load aborted (reason \(abortReason.rawValue))"
+            self.activeLoadRequest = nil
         }
     }
 }

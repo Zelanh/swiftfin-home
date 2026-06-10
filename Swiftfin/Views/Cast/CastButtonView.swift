@@ -67,6 +67,20 @@ struct CastButtonView: View {
                 refreshDiscovery()
             }
         }
+        // Surface loadMedia failures on-device: with a sideloaded build we
+        // have no console, so this alert is our only window into why a cast
+        // silently does nothing ("no content selected" on the dialog).
+        .alert(
+            "Cast",
+            isPresented: Binding(
+                get: { castManager.lastLoadError != nil },
+                set: { if !$0 { castManager.clearLoadError() } }
+            )
+        ) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(castManager.lastLoadError ?? "")
+        }
         .sheet(
             isPresented: $showingQualityPicker,
             onDismiss: {
