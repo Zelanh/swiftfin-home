@@ -343,7 +343,7 @@ extension CastManager: GCKSessionManagerListener {
             // dialog or the session ended early, the *next* picker
             // confirm could be ignored / overridden by lingering values
             // from this one.
-            self.pendingMaxBitrate = 0
+            self.pendingBitrate = nil
             self.pendingAudioStreamIndex = nil
         }
     }
