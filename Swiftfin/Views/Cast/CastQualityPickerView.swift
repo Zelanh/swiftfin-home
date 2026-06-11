@@ -24,7 +24,11 @@ import SwiftUI
 /// caller is responsible for kicking off the actual Cast device picker.
 struct CastQualityPickerView: View {
 
-    let item: MediaPlayerItem
+    /// Audio tracks to offer. Decoupled from `MediaPlayerItem` so the picker
+    /// works both from the in-player flow (which has a built item) and from
+    /// the item-detail page (which only has a `MediaSourceInfo`, and must not
+    /// trigger a transcode negotiation just to show the sheet).
+    let audioStreams: [MediaStream]
     let onConfirm: (_ bitrate: PlaybackBitrate, _ audioStreamIndex: Int?) -> Void
     let onCancel: () -> Void
 
@@ -35,17 +39,18 @@ struct CastQualityPickerView: View {
     private var selectedAudioIndex: Int?
 
     init(
-        item: MediaPlayerItem,
+        audioStreams: [MediaStream],
+        initialAudioStreamIndex: Int?,
         onConfirm: @escaping (PlaybackBitrate, Int?) -> Void,
         onCancel: @escaping () -> Void
     ) {
-        self.item = item
+        self.audioStreams = audioStreams
         self.onConfirm = onConfirm
         self.onCancel = onCancel
         // Pre-select what the user picked last time (persisted via Defaults)
-        // and the audio they already had selected for local playback.
+        // and the audio they already had selected.
         self._selectedBitrate = .init(initialValue: Defaults[.castBitrate])
-        self._selectedAudioIndex = .init(initialValue: item.selectedAudioStreamIndex)
+        self._selectedAudioIndex = .init(initialValue: initialAudioStreamIndex)
     }
 
     // MARK: - Body
@@ -55,7 +60,7 @@ struct CastQualityPickerView: View {
             header
             Divider()
             Form {
-                if !item.audioStreams.isEmpty {
+                if !audioStreams.isEmpty {
                     audioSection
                 }
                 bitrateSection
@@ -84,7 +89,7 @@ struct CastQualityPickerView: View {
     private var audioSection: some View {
         Section(header: Text("Audio")) {
             Picker("Audio track", selection: $selectedAudioIndex) {
-                ForEach(item.audioStreams, id: \.index) { stream in
+                ForEach(audioStreams, id: \.index) { stream in
                     Text(stream.displayTitle ?? "Audio \(stream.index ?? 0)")
                         .tag(stream.index as Int?)
                 }

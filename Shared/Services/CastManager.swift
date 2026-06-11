@@ -101,6 +101,20 @@ final class CastManager: NSObject, ObservableObject {
         context.discoveryManager.startDiscovery()
     }
 
+    /// Aggressively re-kick device discovery. iOS's mDNS stack is lazy on a
+    /// cold start: if no app recently triggered a scan it won't respond
+    /// promptly, which is why the Cast affordance historically only appeared
+    /// after opening Google Home. A `stop` + delayed `start` cycle wakes it.
+    /// Called from views that want the Cast button to appear reliably
+    /// (the in-player button and the item-detail action row).
+    func refreshDiscovery() {
+        let manager = GCKCastContext.sharedInstance().discoveryManager
+        manager.stopDiscovery()
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+            manager.startDiscovery()
+        }
+    }
+
     // MARK: - Media Loading
 
     /// Send a `PlayNow` command to the Jellyfin receiver via its custom namespace.
@@ -129,13 +143,25 @@ final class CastManager: NSObject, ObservableObject {
     /// @MainActor because we read main-actor-isolated properties on `MediaPlayerItem`.
     @MainActor
     func load(item: MediaPlayerItem) {
-        Task { await self.performLoad(item: item) }
+        Task { await self.performLoad(baseItem: item.baseItem, mediaSource: item.mediaSource) }
     }
 
-    /// Async core of `load(item:)`. Kept private so the public surface stays
-    /// callable from synchronous SwiftUI contexts (`.onChange` etc.).
+    /// Cast an item straight from the item-detail page, with no local player
+    /// involved. The detail Cast button calls this once a Cast session has
+    /// started, passing the `BaseItemDto` + `MediaSourceInfo` from its
+    /// `ItemViewModel`. Playback is then driven entirely by the native Cast
+    /// controls — this avoids the wasted second transcode that the
+    /// "play locally, then cast" flow incurs.
     @MainActor
-    private func performLoad(item: MediaPlayerItem) async {
+    func castFromDetail(baseItem: BaseItemDto, mediaSource: MediaSourceInfo) {
+        Task { await self.performLoad(baseItem: baseItem, mediaSource: mediaSource) }
+    }
+
+    /// Async core shared by both cast entry points (in-player `load(item:)`
+    /// and detail-page `castFromDetail`). Kept private so the public surface
+    /// stays callable from synchronous SwiftUI contexts (`.onChange` etc.).
+    @MainActor
+    private func performLoad(baseItem: BaseItemDto, mediaSource: MediaSourceInfo) async {
         guard let remoteMediaClient = currentSession?.remoteMediaClient else {
             lastLoadError = "Cast: no active session when load was attempted"
             return
@@ -148,7 +174,7 @@ final class CastManager: NSObject, ObservableObject {
         // on the TV. Genuine re-casts always start from an ended session
         // (mediaStatus idle/nil), so they pass this guard.
         if let currentID = remoteMediaClient.mediaStatus?.mediaInformation?.contentID,
-           currentID == item.baseItem.id,
+           currentID == baseItem.id,
            remoteMediaClient.mediaStatus?.playerState != .idle
         {
             return
@@ -159,7 +185,7 @@ final class CastManager: NSObject, ObservableObject {
         // does (`getPostedPlaybackInfo`), just with a receiver-appropriate
         // profile (h264 + stereo AAC + MPEG-TS HLS) instead of the local
         // player's. Jellyfin bakes the cap into the returned stream URL.
-        guard let castItem = await rebuildItemForCast(from: item) else {
+        guard let castItem = await rebuildItemForCast(baseItem: baseItem, mediaSource: mediaSource) else {
             lastLoadError = "Cast: failed to negotiate a Chromecast stream with the server"
             return
         }
@@ -200,12 +226,12 @@ final class CastManager: NSObject, ObservableObject {
     /// the picker's bitrate tier (falling back to the global Settings tier).
     /// Returns `nil` on failure.
     @MainActor
-    private func rebuildItemForCast(from item: MediaPlayerItem) async -> MediaPlayerItem? {
+    private func rebuildItemForCast(baseItem: BaseItemDto, mediaSource: MediaSourceInfo) async -> MediaPlayerItem? {
         let requested = pendingBitrate ?? Defaults[.VideoPlayer.Playback.appMaximumBitrate]
         do {
             return try await MediaPlayerItem.build(
-                for: item.baseItem,
-                mediaSource: item.mediaSource,
+                for: baseItem,
+                mediaSource: mediaSource,
                 requestedBitrate: requested,
                 customDeviceProfile: .buildChromecast()
             )
