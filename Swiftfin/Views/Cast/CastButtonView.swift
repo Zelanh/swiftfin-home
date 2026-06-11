@@ -106,7 +106,8 @@ struct CastButtonView: View {
             // the optional unwrap is just a defensive guard.
             if let item = manager.playbackItem {
                 CastQualityPickerView(
-                    item: item,
+                    audioStreams: item.audioStreams,
+                    initialAudioStreamIndex: item.selectedAudioStreamIndex,
                     onConfirm: { bitrate, audioIndex in
                         castManager.pendingBitrate = bitrate
                         castManager.pendingAudioStreamIndex = audioIndex

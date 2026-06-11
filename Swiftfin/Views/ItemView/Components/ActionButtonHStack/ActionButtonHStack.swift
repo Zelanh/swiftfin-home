@@ -105,6 +105,10 @@ extension ItemView {
                         view.aspectRatio(1, contentMode: .fit)
                     }
                 }
+
+                // MARK: - Cast to Chromecast (fork addition)
+
+                CastActionButton(viewModel: viewModel)
             }
             .font(.title3)
             .fontWeight(.semibold)
