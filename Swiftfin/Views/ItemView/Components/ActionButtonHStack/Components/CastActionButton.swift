@@ -74,7 +74,21 @@ extension ItemView {
         // MARK: - Body
 
         var body: some View {
-            content
+            // The button is ALWAYS rendered (never conditionally removed) so
+            // its `.onAppear` reliably fires and kicks device discovery — a
+            // zero-size / absent view does not fire `.onAppear`, which would
+            // mean discovery never runs and the button never appears (the
+            // device is only "available" once discovery finds it). When no
+            // device is around we collapse it to zero width + invisible
+            // instead, mirroring how the in-player `CastButtonView` stays
+            // mounted at 28×28 with opacity 0.
+            Button("Cast", systemImage: castManager.isSessionActive ? "tv.fill" : "tv") {
+                handleTap()
+            }
+            .frame(maxWidth: isVisible ? .infinity : 0)
+            .opacity(isVisible ? 1 : 0)
+            .disabled(!isVisible)
+            .accessibilityHidden(!isVisible)
                 .onAppear(perform: refreshDiscovery)
                 .onDisappear {
                     // Drop any un-consumed cast intent if the user navigates
@@ -112,22 +126,6 @@ extension ItemView {
                         }
                     )
                 }
-        }
-
-        @ViewBuilder
-        private var content: some View {
-            if isVisible {
-                Button("Cast", systemImage: castManager.isSessionActive ? "tv.fill" : "tv") {
-                    handleTap()
-                }
-                .frame(maxWidth: .infinity)
-            } else {
-                // Zero-size placeholder keeps this view mounted (so discovery
-                // and session observation keep running) without taking a slot
-                // in the action row when no Cast device is available.
-                Color.clear
-                    .frame(width: 0, height: 0)
-            }
         }
 
         // MARK: - Actions
