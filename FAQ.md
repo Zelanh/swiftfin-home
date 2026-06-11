@@ -58,9 +58,9 @@ Upgrade to v1.1.0 or later to stop needing it.
 
 ## 🟢 The quality picker sometimes sends a different value than what is visually selected
 
-**Affected versions:** v1.0.0, v1.1.0. **Fixed in:** v1.2.0 (and current `main`).
+**Affected versions:** v1.0.0, v1.1.0, v1.2.0 (partial). **Fully fixed in:** v1.3.0 (and current `main`).
 
-### Symptom (v1.0.0 / v1.1.0)
+### Symptom (v1.0.0–v1.2.0)
 
 You tap the Cast button. The quality picker sheet appears, with one of
 the tiers already shown selected (the radio button is on it). You tap
@@ -71,119 +71,174 @@ correspond to the tier you saw selected**. For example, with **1.5 Mbps
 visually marked**, the resulting FFmpeg `-b:v` came out at ~12 Mbps —
 i.e. a much higher tier than the one shown to the user.
 
-This was verified after exhausting the obvious "stale state" causes:
+### What was actually happening (understood during the v1.3.0 work)
 
-- Restarted the Jellyfin server
-- Force-quit Swiftfin from the iPhone app switcher
-- Restarted the Chromecast device
-- Re-opened the app, re-opened the picker — visual selection still
-  showed 1.5 Mbps as expected
+There were **two independent defects**, and untangling them took
+several testing rounds:
 
-The wrong bitrate kept being sent until a **different tier was actively
-selected**.
+1. **A real UI bug**: the SwiftUI inline picker could show a checkmark
+   on one tier while the bound value held a different number. Fixed in
+   v1.2.0.
+2. **The deeper truth: in v1.0.0–v1.2.0 the picker value never
+   reliably controlled the stream at all.** Those versions delegated
+   playback to the Jellyfin Chromecast receiver, which renegotiates
+   the stream with its own device profile and its own bandwidth
+   detection. The bitrate that ended up on the server was the
+   receiver's decision; the tier sent by the app was at best a hint.
+   Apparent correlations observed in earlier testing (a pick "working"
+   after re-selecting a tier, lower picks coinciding with lower
+   transcodes) were the receiver's own bandwidth detection landing
+   near the picked value **by coincidence**.
 
-### Workaround for v1.0.0 / v1.1.0 (reliably repeatable)
+### Workaround for v1.0.0–v1.2.0
 
-When the value you want is already shown as visually selected in the
-picker, **do not just tap Start**. Instead:
-
-1. Tap a **different** tier than what's already shown (e.g. tap 3 Mbps
-   if 1.5 Mbps is shown)
-2. Confirm with **Start** — this Cast session will use that different
-   tier
-3. (Optional) If you want a different tier than the one you just used,
-   open the picker again now, pick what you actually want, and confirm
-
-The key: a value only seems to actually be sent after a tier other than
-the one shown at picker-open is *actively selected* at least once.
-
-Re-tapping the already-selected tier does NOT count as an active
-selection — you have to tap a *different* one.
+**There is none.** On those versions the bitrate is effectively chosen
+by the Cast receiver, not by the picker — no input sequence changes
+that. An earlier revision of this FAQ described a "reliably
+repeatable" workaround (actively selecting a different tier before
+confirming); it was based on the coincidental observations described
+above and has been removed.
 
 ### Status
 
-✅ **Fixed.** Verified on iPhone 14 against a Chromecast Ultra: picking
-a tier in the picker and tapping Start now sends that exact bitrate to
-the Jellyfin receiver. Confirmed empirically with multiple consecutive
-casts at different tiers (1.5 Mbps → ~9 Mbps actual on HDR 4K; 20 Mbps
-→ ~15 Mbps actual capped by output resolution).
+✅ **Two-stage fix. Both stages now in `main`.**
 
-The fix replaces the SwiftUI `.pickerStyle(.inline)` Picker — which was
-desyncing its visual checkmark from the bound `@State` value — with
-explicit `Button` rows that drive the assignment directly. The
-`asyncAfter(0.4)` timer that gated the native cast dialog was also
-replaced with the sheet's `onDismiss` callback, so the dialog presents
-on the real end-of-animation event instead of guessing. And on session
-end, `CastManager.pendingMaxBitrate` / `pendingAudioStreamIndex` are
-reset so a cancelled or interrupted session can't leak stale values
-into the next attempt.
+**Stage 1 — v1.2.0 — visual desync corrected.** The SwiftUI
+`.pickerStyle(.inline)` Picker was replaced with explicit `Button` rows
+so the visible checkmark and the bound `@State` value can no longer
+disagree. The `asyncAfter(0.4)` before the native cast dialog was
+replaced with the sheet's `onDismiss` callback so dialog presentation
+waits on the real animation-end event. The picker's `pending*` overrides
+on `CastManager` are cleared at session end so a cancelled or
+interrupted session can't leak stale values into the next attempt.
 
-If you are still on a v1.0.0 / v1.1.0 IPA, the workaround above still
-applies. Upgrade to v1.2.0 or later to stop needing it.
+After v1.2.0 shipped, follow-up testing surfaced that the visual fix
+alone wasn't enough: the resulting transcode bitrate on the server
+still didn't reliably match the Cast picker selection.
+
+**Stage 2 — v1.3.0 — transcode bitrate now actually follows the
+picker.** Root cause: the cast was delegated to the Jellyfin
+Chromecast receiver app via its custom `PlayNow` protocol, and that
+receiver **renegotiates the stream with Jellyfin using its own device
+profile and its own bandwidth detection** — any bitrate the app sends
+along is at best a hint, at worst ignored. No client-side change
+could make the picker authoritative under that architecture.
+
+v1.3.0 changes the architecture to mirror what local playback does:
+`CastManager.load` rebuilds the `MediaPlayerItem` through the same
+`getPostedPlaybackInfo` negotiation local play uses — but with a
+Chromecast-specific device profile (h264 + stereo AAC + MPEG-TS HLS)
+and the picker's `PlaybackBitrate` tier — and hands the resulting
+stream URL directly to the **default Google media receiver** via
+standard CAF `loadMedia`. The receiver just plays the URL; the cap is
+baked into it by Jellyfin itself. Verified empirically: picking the
+720 Kbps tier produces an FFmpeg transcode at ~336 kbps video
+(total budget minus audio), picking 420 Kbps produces ~292 kbps, on
+both HDR10 and Dolby Vision 8.1 sources.
+
+The picker now exposes the same tiers (and the same `.auto` speed
+test) as Settings → Playback Quality, acting as a per-cast override.
+
+If you are still on a v1.0.0–v1.2.0 IPA: there is nothing you can do
+client-side — the cast bitrate is the receiver's choice on those
+versions. Upgrade to v1.3.0 or later for a picker that actually
+controls the stream.
 
 ---
 
-## 🔵 Changing the picker tier between two consecutive casts of the same item may not take effect
+## 🟢 Changing the picker tier between two consecutive casts of the same item may not take effect
 
-**Confirmed in:** v1.2.0.
+**Affected versions:** v1.0.0–v1.2.0. **Fixed in:** v1.3.0 (and current `main`).
 
-### Symptom (what we observe)
+### Symptom (v1.0.0–v1.2.0)
 
-You cast a movie at one tier (say 1.5 Mbps). It works. You stop the
-cast, then cast the **same movie again** shortly after with a
-**different tier** (say 20 Mbps). On the server, the FFmpeg transcode
-keeps using a bitrate consistent with the **original** cap (~9 Mbps),
-not the new one.
+You cast a movie, stop the cast, then cast the **same movie again**
+shortly after. Instead of starting a fresh stream, the receiver keeps
+serving the **original transcode session** — same bitrate, same
+server-side process.
 
 The FFmpeg log file for the second cast shows:
 
 - A high `-start_number` value (e.g. 237) instead of `0`.
-- A `-b:v` consistent with the original cap, not the new one.
+- The same `-b:v` as the first session.
 
-### What we know (empirically)
-
-- Hitting **"Play from Beginning"** on the item in Jellyfin's own UI,
-  before tapping Cast in Swiftfin, produces a log with
-  `-start_number 0` and `-b:v` matching the **new** cap. Verified
-  with both 1.5 Mbps (→ ~9 Mbps actual) and 20 Mbps (→ ~15 Mbps actual,
-  output-resolution-limited) picks.
-- Casting a **different** item works correctly on the first attempt:
-  switching from one movie to another with a 1.5 Mbps pick produced
-  ~8.4 Mbps actual with `-start_number 0`. So the picker → app →
-  receiver chain functions as expected for items that have not been
-  recently cast.
-- This fork's code **does construct and send** a new `maxBitrate`
-  value in the `PlayNow` JSON payload on every cast attempt (verified
-  by reading our own source).
-
-### What we do NOT know
-
-- Whether the new cap is being ignored because the Jellyfin server
-  reuses an existing transcode session, because the Cast receiver
-  doesn't request a new one, or for some other reason.
-- Whether there is a time-based expiry, and if so what it is or how
-  (or if) it can be configured.
-- Whether other Jellyfin Cast clients (e.g. `jellyfin-web`) exhibit
-  the same behavior in the same setup.
-- Whether an explicit Stop sent on the custom Cast namespace before
-  the new `PlayNow` would force a fresh transcode. This has not been
-  tested.
-
-### Workarounds (empirically verified to work)
+### Workaround for v1.0.0–v1.2.0 (empirically verified, with a caveat)
 
 - **In Jellyfin, hit "Play from Beginning"** from the item's context
-  menu before casting again.
-- **In Jellyfin Dashboard → Activity → Active Transcoding**, kill any
-  existing transcode for that item before casting again.
-- **Cast a different item first**, then come back to the original.
+  menu before tapping Cast in Swiftfin. This does force a fresh
+  transcode session. **Note, however**, that on those versions the new
+  session's bitrate is still chosen by the Cast receiver's own
+  bandwidth detection, not by the quality picker (see the previous
+  entry) — so this workaround gets you a *fresh* stream, not a
+  *chosen* one.
 
 ### Status
 
-🟡 **Reproducible, root cause not pinned down.** A future fork
-iteration may experiment with sending an explicit Stop on the custom
-Cast namespace (or some other instruction to the receiver / server) to
-force a fresh transcode on every cast attempt. Nothing tested yet,
-nothing promised.
+✅ **Fixed in v1.3.0**, as a side effect of the architecture change
+described in the previous entry: `CastManager.load` now rebuilds the
+`MediaPlayerItem` on **every** cast attempt via `MediaPlayerItem.build`,
+which calls `getPostedPlaybackInfo` server-side each time. Each call
+yields a fresh `PlaySessionID` and a transcoder freshly spun up with
+the chosen cap, and the resulting URL is handed directly to the
+receiver. Re-casting the same item with a different picker tier now
+works on the first attempt — verified empirically (two consecutive
+casts of the same movie at different tiers produced two fresh FFmpeg
+sessions at ~336 kbps and ~292 kbps respectively).
+
+If you are still on a v1.0.0–v1.2.0 IPA, the workaround above still
+applies. Upgrade to v1.3.0 or later to stop needing it.
+
+---
+
+## 🟡 Poster artwork missing in the Cast mini controller and expanded controls
+
+**Affected versions:** v1.3.0.
+
+### Symptom
+
+While casting, the mini controller (bottom bar) and the expanded
+controls screen (tap the bar) show no movie poster — title and
+playback controls work fine, the artwork area is just empty.
+
+### Why (cosmetic only)
+
+v1.3.0's `loadMedia` attaches only the title to the cast metadata; no
+image URLs are included yet. The default Google receiver and the iOS
+cast controls show exactly what the sender provides — no image
+provided, no image shown. Playback is completely unaffected.
+
+### Status
+
+🐛 **Known. Cosmetic.** Fix planned for the next patch release
+(attach the item's primary image URL to `GCKMediaMetadata`).
+
+---
+
+## 🟡 Stopping the cast from the expanded controls leaves the app out of sync
+
+**Affected versions:** v1.3.0.
+
+### Symptom
+
+If you stop casting from the **expanded controls screen** (tap the
+mini controller → tap the cast button there → "Stop casting"), the TV
+stops correctly, but Swiftfin doesn't register that the session ended:
+the next tap on the Cast button jumps straight to the device picker
+instead of showing the quality picker first.
+
+Stopping from the **first-level dialog** (tap the Cast button in the
+player → "Stop casting") behaves correctly.
+
+### Workaround (empirically verified)
+
+Stop casts from the first-level cast dialog rather than from inside
+the expanded controls. If you already hit the bug, force-quitting
+Swiftfin restores a clean state on next launch.
+
+### Status
+
+🐛 **Known.** Likely a session-state callback not firing for that
+particular teardown path. Under investigation for a patch release.
 
 ---
 

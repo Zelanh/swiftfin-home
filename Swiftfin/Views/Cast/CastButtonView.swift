@@ -67,6 +67,20 @@ struct CastButtonView: View {
                 refreshDiscovery()
             }
         }
+        // Surface cast-load failures on-device: with a sideloaded build we
+        // have no console, so this alert is our only window into why a cast
+        // silently does nothing.
+        .alert(
+            "Cast",
+            isPresented: Binding(
+                get: { castManager.lastLoadError != nil },
+                set: { if !$0 { castManager.clearLoadError() } }
+            )
+        ) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(castManager.lastLoadError ?? "")
+        }
         .sheet(
             isPresented: $showingQualityPicker,
             onDismiss: {
@@ -94,7 +108,7 @@ struct CastButtonView: View {
                 CastQualityPickerView(
                     item: item,
                     onConfirm: { bitrate, audioIndex in
-                        castManager.pendingMaxBitrate = bitrate
+                        castManager.pendingBitrate = bitrate
                         castManager.pendingAudioStreamIndex = audioIndex
                         // Latch the intent; the actual cast-dialog
                         // presentation happens from the sheet's

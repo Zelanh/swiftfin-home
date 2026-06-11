@@ -14,23 +14,29 @@ import SwiftUI
 /// track and the maximum bitrate. Mirrors the flow used by other Jellyfin
 /// clients like Streamyfin.
 ///
+/// The bitrate tiers are sourced directly from Swiftfin's `PlaybackBitrate`
+/// enum so this picker shows exactly the same labels (and the same `.auto`
+/// behaviour) as the global Settings → Playback Quality picker. The chosen
+/// tier acts as a per-Cast override; the audio override is per-cast only
+/// and not persisted.
+///
 /// On confirm, the chosen values are passed back via `onConfirm` and the
 /// caller is responsible for kicking off the actual Cast device picker.
 struct CastQualityPickerView: View {
 
     let item: MediaPlayerItem
-    let onConfirm: (_ maxBitrate: Int, _ audioStreamIndex: Int?) -> Void
+    let onConfirm: (_ bitrate: PlaybackBitrate, _ audioStreamIndex: Int?) -> Void
     let onCancel: () -> Void
 
     @State
-    private var selectedBitrate: Int
+    private var selectedBitrate: PlaybackBitrate
 
     @State
     private var selectedAudioIndex: Int?
 
     init(
         item: MediaPlayerItem,
-        onConfirm: @escaping (Int, Int?) -> Void,
+        onConfirm: @escaping (PlaybackBitrate, Int?) -> Void,
         onCancel: @escaping () -> Void
     ) {
         self.item = item
@@ -38,22 +44,9 @@ struct CastQualityPickerView: View {
         self.onCancel = onCancel
         // Pre-select what the user picked last time (persisted via Defaults)
         // and the audio they already had selected for local playback.
-        self._selectedBitrate = .init(initialValue: Defaults[.castMaxBitrate])
+        self._selectedBitrate = .init(initialValue: Defaults[.castBitrate])
         self._selectedAudioIndex = .init(initialValue: item.selectedAudioStreamIndex)
     }
-
-    // MARK: - Bitrate options
-
-    /// Pairs of (bits/sec, human label). `0` is the sentinel for "no cap".
-    private static let bitrateOptions: [(bps: Int, label: String)] = [
-        (1_500_000, "1.5 Mbps · 480p"),
-        (3_000_000, "3 Mbps · 720p"),
-        (5_000_000, "5 Mbps · 720p HQ"),
-        (8_000_000, "8 Mbps · 1080p"),
-        (12_000_000, "12 Mbps · 1080p HQ"),
-        (20_000_000, "20 Mbps · 4K"),
-        (0, "Unlimited"),
-    ]
 
     // MARK: - Body
 
@@ -68,17 +61,6 @@ struct CastQualityPickerView: View {
                 bitrateSection
             }
         }
-        .onAppear {
-            // Defensive: if Defaults[.castMaxBitrate] holds a value that is
-            // not present in the current bitrateOptions (e.g. because the
-            // options list changed between app versions, or because a buggy
-            // earlier picker run left a stale value), reset to a sane
-            // default so the picker shows a valid checked row instead of
-            // a desynced visual selection.
-            if !Self.bitrateOptions.contains(where: { $0.bps == selectedBitrate }) {
-                selectedBitrate = 5_000_000
-            }
-        }
     }
 
     private var header: some View {
@@ -91,7 +73,7 @@ struct CastQualityPickerView: View {
             Spacer()
             Button("Start") {
                 // Persist for next time and hand control back to the caller.
-                Defaults[.castMaxBitrate] = selectedBitrate
+                Defaults[.castBitrate] = selectedBitrate
                 onConfirm(selectedBitrate, selectedAudioIndex)
             }
             .fontWeight(.semibold)
@@ -116,7 +98,8 @@ struct CastQualityPickerView: View {
             footer: Text(
                 "Lower bitrates make Cast more reliable on weak WiFi and " +
                     "avoid stutter on HDR sources. Pick higher only if your " +
-                    "network is solid."
+                    "network is solid. \"Auto\" runs a quick speed test on the " +
+                    "next cast."
             )
             .font(.footnote)
             .foregroundStyle(.secondary)
@@ -124,22 +107,18 @@ struct CastQualityPickerView: View {
             // Explicit Button rows instead of `Picker(.inline)`:
             // SwiftUI's inline picker style with an Int tag has been
             // observed to desync the visual checkmark from the bound
-            // @State value (a row appears "selected" while the binding
-            // retains a different number). That manifested as the bug
-            // where tapping Start without first tapping a *different*
-            // tier sent the wrong maxBitrate to the receiver. Driving
-            // the assignment manually from each Button removes the
-            // ambiguity — the row that's drawn checked is exactly the
-            // one whose value is in @State.
-            ForEach(Self.bitrateOptions, id: \.bps) { option in
+            // @State value. Driving the assignment manually from each
+            // Button removes the ambiguity — the row that's drawn
+            // checked is exactly the one whose value is in @State.
+            ForEach(PlaybackBitrate.allCases, id: \.rawValue) { option in
                 Button {
-                    selectedBitrate = option.bps
+                    selectedBitrate = option
                 } label: {
                     HStack {
-                        Text(option.label)
+                        Text(option.displayTitle)
                             .foregroundStyle(.primary)
                         Spacer()
-                        if selectedBitrate == option.bps {
+                        if selectedBitrate == option {
                             Image(systemName: "checkmark")
                                 .font(.body.weight(.semibold))
                                 .foregroundStyle(.tint)

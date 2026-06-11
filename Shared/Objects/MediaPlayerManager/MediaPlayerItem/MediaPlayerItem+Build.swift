@@ -18,12 +18,18 @@ import Logging
 extension MediaPlayerItem {
 
     /// The main `MediaPlayerItem` builder for normal online usage.
+    ///
+    /// `customDeviceProfile` overrides the profile normally derived from
+    /// `videoPlayerType` + `compatibilityMode`. Used by the Chromecast flow,
+    /// which negotiates with a receiver-specific profile instead of the local
+    /// player's. The requested bitrate is applied to it the same way.
     static func build(
         for initialItem: BaseItemDto,
         mediaSource _initialMediaSource: MediaSourceInfo? = nil,
         videoPlayerType: VideoPlayerType = Defaults[.VideoPlayer.videoPlayerType],
         requestedBitrate: PlaybackBitrate = Defaults[.VideoPlayer.Playback.appMaximumBitrate],
         compatibilityMode: PlaybackCompatibility = Defaults[.VideoPlayer.Playback.compatibilityMode],
+        customDeviceProfile: DeviceProfile? = nil,
         modifyItem: ((inout BaseItemDto) -> Void)? = nil
     ) async throws -> MediaPlayerItem {
 
@@ -63,11 +69,19 @@ extension MediaPlayerItem {
 
         let maxBitrate = try await requestedBitrate.getMaxBitrate()
 
-        let deviceProfile = DeviceProfile.build(
-            for: videoPlayerType,
-            compatibilityMode: compatibilityMode,
-            maxBitrate: maxBitrate
-        )
+        let deviceProfile: DeviceProfile = {
+            if var customDeviceProfile {
+                customDeviceProfile.maxStaticBitrate = maxBitrate
+                customDeviceProfile.maxStreamingBitrate = maxBitrate
+                customDeviceProfile.musicStreamingTranscodingBitrate = maxBitrate
+                return customDeviceProfile
+            }
+            return DeviceProfile.build(
+                for: videoPlayerType,
+                compatibilityMode: compatibilityMode,
+                maxBitrate: maxBitrate
+            )
+        }()
 
         var playbackInfo = PlaybackInfoDto()
         playbackInfo.isAutoOpenLiveStream = true

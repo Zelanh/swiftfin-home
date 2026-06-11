@@ -16,7 +16,14 @@ class AppDelegate: NSObject, UIApplicationDelegate {
         _ application: UIApplication,
         didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil
     ) -> Bool {
-        let castOptions = GCKCastOptions(receiverApplicationID: CastManager.jellyfinReceiverAppID)
+        // Default Google media receiver — the same configuration Streamyfin
+        // uses (react-native-google-cast with no custom receiver id). The
+        // Jellyfin receiver (F007D354) only acts on its own PlayNow protocol
+        // and renegotiates the stream with its own DeviceProfile, discarding
+        // the bitrate the user picked. The default receiver simply plays the
+        // URL we negotiated with Jellyfin via the Chromecast DeviceProfile,
+        // making the quality picker authoritative.
+        let castOptions = GCKCastOptions(receiverApplicationID: kGCKDefaultMediaReceiverApplicationID)
         castOptions.physicalVolumeButtonsWillControlDeviceVolume = true
         GCKCastContext.setSharedInstanceWith(castOptions)
         GCKCastContext.sharedInstance().useDefaultExpandedMediaControls = true
