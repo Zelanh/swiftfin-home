@@ -24,12 +24,18 @@
 ## What this fork does
 
 - Adds a Cast button to the iOS video player's navigation bar.
-- Tapping the Cast button opens a **quality picker** sheet (audio track + max
-  bitrate cap), then hands off to the standard GoogleCast device picker.
-- Streams to the **official Jellyfin Chromecast receiver** (app ID
-  `F007D354`) using its custom-namespace protocol — the same one used by the
-  `jellyfin-web` Chromecast sender.
-- Persists the last-used max bitrate so the picker pre-selects it next time.
+- Tapping the Cast button opens a **quality picker** sheet exposing the
+  same bitrate tiers (including `Auto` with its network speed test) as
+  Swiftfin's Settings → Playback Quality, then hands off to the standard
+  GoogleCast device picker.
+- Negotiates the stream with the Jellyfin server itself — the same
+  `PlaybackInfo` negotiation local playback uses, but with a
+  Chromecast-specific device profile (h264 + stereo AAC + MPEG-TS HLS)
+  and the picker's bitrate baked into the resulting URL — and plays
+  that URL on the **default Google media receiver** via standard CAF
+  `loadMedia`. The picker tier is therefore a real cap, enforced by
+  the server's transcoder.
+- Persists the last-used bitrate tier so the picker pre-selects it next time.
 - Switches the active `MediaPlayerProxy` from VLC to a Chromecast proxy when
   a session is active, so the existing playback controls (play/pause/seek)
   remain functional.
@@ -69,23 +75,38 @@ users. Skim these before assuming something is broken:
   native device dialog without picking a device, your chosen bitrate is
   still remembered for the next try. This is intentional and matches
   how Streamyfin behaves.
-- **The "Maximum bitrate" values are hints, not hard caps.** The Jellyfin
-  Chromecast receiver interprets them as a quality tier and applies its
-  own device profile on top. Empirically, asking for `1.5 Mbps` produces
-  ~9 Mbps of output for a 1080p source, and asking for `8 Mbps` produces
-  ~18 Mbps. If a movie is stuttering on a higher tier, drop one or two
-  steps and try again.
+- **The picker tier is the total stream budget, video + audio.**
+  Jellyfin splits it: picking `720 Kbps` yields roughly ~336 kbps of
+  video plus the audio track. If a movie stutters on a higher tier,
+  drop one or two steps and try again — the cap is enforced exactly.
+- **The TV shows Google's standard player, not a Jellyfin-branded UI.**
+  Since v1.3.0 the fork casts to the default Google media receiver, so
+  the idle screen and player chrome on the TV are Google's. Cosmetic
+  only.
+- **Cast audio is stereo.** The Chromecast device profile downmixes
+  multichannel tracks to 2.0 AAC for maximum receiver compatibility.
+  5.1 / Atmos passthrough is a possible future improvement.
+- **Subtitles are burned into the video server-side.** The cast stream
+  carries the item's current subtitle selection rendered into the
+  picture (this is also how Streamyfin handles cast subtitles). Burn-in
+  costs some extra GPU on the server while a sub track is active.
 
 ## What this fork does NOT do
 
 - **No tvOS Chromecast support.** The GoogleCast SDK is iOS-only for
   Carthage binaries; the tvOS target is unchanged.
-- **No subtitle track override in the cast picker.** The current subtitle
-  selection from the local player is forwarded as-is.
-- **No mid-cast quality change.** To change `maxBitrate` during a cast you
-  have to stop and start again.
-- **No Cast queue management.** Single-item PlayNow only — no PlayNext or
-  PlayLast.
+- **No subtitle track override in the cast picker.** The cast stream
+  uses the item's current subtitle selection, burned in server-side.
+- **No audio track override on cast (v1.3.0).** The picker still shows
+  an audio selector, but since the v1.3.0 architecture change the
+  selection is not yet forwarded into the negotiated stream — the cast
+  plays the item's default/selected audio. Known limitation, planned
+  for a patch release.
+- **No mid-cast quality change.** To change the bitrate during a cast
+  you have to stop and start again.
+- **No Cast queue management.** Single-item casts only (the next
+  episode in a queue is loaded automatically, but there's no
+  PlayNext/PlayLast control).
 - **No keepalive ping** to the server during long sessions. If the
   Jellyfin transcoding throttle/kill timer is too aggressive, playback can
   interrupt. Tune the server settings, not the client.
@@ -121,9 +142,11 @@ Swiftfin/Views/Cast/CastQualityPickerView.swift
 ### Source files modified
 
 ```
-Swiftfin/App/AppDelegate.swift                 # GCKCastContext bootstrap
+Swiftfin/App/AppDelegate.swift                 # GCKCastContext bootstrap (default Google receiver)
 Shared/Components/VideoPlayer.swift            # proxy switching on isSessionActive
 Swiftfin/Views/VideoPlayerContainerView/PlaybackControls/Components/NavigationBar/NavigationBar.swift  # CastButtonView placement
+Shared/Extensions/JellyfinAPI/DeviceProfile.swift  # additive: buildChromecast() profile
+Shared/Objects/MediaPlayerManager/MediaPlayerItem/MediaPlayerItem+Build.swift  # optional customDeviceProfile: param
 Cartfile                                       # ChromeCastFramework binary
 ```
 
@@ -193,119 +216,56 @@ CastManager.pendingBitrate / pendingAudioStreamIndex set
 GCKCastContext.presentCastDialog() (native device picker)
         |
         v
-User picks a Chromecast device
-        |
-        v
-GoogleCast SDK starts a GCKCastSession
+User picks a Chromecast device -> GoogleCast SDK starts a GCKCastSession
         |
         v
 GCKSessionManagerListener.sessionManager(_:didStart:) fires
+-> CastManager.isSessionActive = true (@Published)
         |
         v
-CastManager attaches a GCKGenericChannel on urn:x-cast:com.connectsdk
+VideoPlayer.onChange(of: isSessionActive) swaps manager.proxy to
+ChromecastMediaPlayerProxy, pauses local VLC, calls castManager.load(item:)
         |
         v
-CastManager sends `Identify` command via that channel
+CastManager.load() rebuilds the MediaPlayerItem via
+MediaPlayerItem.build(requestedBitrate: pendingBitrate ?? globalDefault,
+customDeviceProfile: .buildChromecast()) — the same getPostedPlaybackInfo
+negotiation local play uses. Jellyfin returns a fresh PlaySessionID and
+a stream URL (TranscodingUrl or direct) with the picker's cap baked in.
         |
         v
-CastManager.isSessionActive = true (@Published)
+CastManager hands that URL to the receiver via standard CAF loadMedia
+(GCKMediaInformation: contentURL, HLS/mp4 contentType, title metadata)
         |
         v
-VideoPlayer.onChange(of: isSessionActive) swaps manager.proxy to ChromecastMediaPlayerProxy
-        |
-        v
-VideoPlayer pauses local VLC, calls castManager.load(item:)
-        |
-        v
-CastManager.load() spawns a Task that rebuilds the MediaPlayerItem
-via MediaPlayerItem.build(requestedBitrate: pendingBitrate ?? globalDefault,
-compatibilityMode: userSetting). This triggers a fresh
-getPostedPlaybackInfo server-side -> new PlaySessionID + new MediaSource
-with the picker's cap baked into TranscodingUrl by Jellyfin.
-        |
-        v
-CastManager injects the rebuilt MediaSource into the BaseItemDto's
-mediaSources, builds the PlayNow JSON, sends via the channel
-        |
-        v
-Jellyfin Chromecast receiver decodes payload, follows the
-TranscodingUrl that already carries our cap, starts playback on the
-Cast device.
+The default Google media receiver fetches the URL and plays it.
+An idempotency guard skips the load if the receiver is already playing
+the same item (prevents re-casts when the app returns to foreground).
         |
         v
 GCKRemoteMediaClient delivers media status updates -> CastManager
 publishes castPlayerState / currentCastPosition -> SwiftUI reacts.
 ```
 
-### Custom namespace protocol
+### Receiver & stream negotiation
 
-The Jellyfin Chromecast receiver does **not** intercept standard CAF
-`loadMedia` requests. It exclusively listens for JSON messages on:
+Since v1.3.0 the fork casts to the **default Google media receiver**
+(`kGCKDefaultMediaReceiverApplicationID`) and controls quality by
+negotiating the stream URL itself, exactly like local playback does:
+`POST /Items/{id}/PlaybackInfo` with a Chromecast `DeviceProfile`
+(h264 video, stereo AAC, HLS with MPEG-TS segments, subtitles via
+server-side burn-in) plus the picker's `MaxStreamingBitrate`. The
+receiver plays whatever URL it's given — there is no renegotiation
+layer that can override the user's choice.
 
-```
-namespace: urn:x-cast:com.connectsdk
-```
-
-Discovered by reading
-[jellyfin-chromecast](https://github.com/jellyfin/jellyfin-chromecast)
-and `jellyfin-web/src/plugins/chromecastPlayer/plugin.js`.
-
-#### `Identify` handshake (sent on session start)
-
-```json
-{
-    "command": "Identify",
-    "serverAddress": "https://your-jellyfin.example",
-    "accessToken": "<access token>",
-    "userId": "<user id>",
-    "deviceId": "iOS_<vendor UUID>",
-    "serverId": "<server id>",
-    "serverVersion": "10.x.y",
-    "receiverName": "Living Room",
-    "options": {}
-}
-```
-
-#### `PlayNow` (sent when load() is called)
-
-```json
-{
-    "command": "PlayNow",
-    "serverAddress": "https://your-jellyfin.example",
-    "accessToken": "<access token>",
-    "userId": "<user id>",
-    "deviceId": "iOS_<vendor UUID>",
-    "serverId": "<server id>",
-    "serverVersion": "10.x.y",
-    "receiverName": "Living Room",
-    "options": {
-        "items": [
-            { "Id": "...", "Type": "Movie", "Name": "...", "..." : "..." }
-        ],
-        "startPositionTicks": 0,
-        "mediaSourceId": "<media source>",
-        "audioStreamIndex": -1,
-        "subtitleStreamIndex": -1,
-        "maxBitrate": 5000000
-    }
-}
-```
-
-- `startPositionTicks`: 1 second = 10,000,000 ticks (Jellyfin convention).
-- `items[]`: full `BaseItemDto` as PascalCase JSON, with its `MediaSources`
-  array replaced by `[castItem.mediaSource]` — the one freshly returned by
-  `getPostedPlaybackInfo` during the per-cast rebuild. This is what
-  actually carries the picker's cap, via the `TranscodingUrl` Jellyfin
-  baked into it. We round-trip through `JSONEncoder` +
-  `JSONSerialization` so `JellyfinAPI`'s CodingKeys produce the right
-  server JSON shape.
-- `mediaSourceId`: matches `items[0].MediaSources[0].Id`.
-- `maxBitrate`: belt-and-braces hint that mirrors the cap already baked
-  into the `TranscodingUrl`. Omitted for `.auto` (where the value was
-  resolved server-side by `getPostedPlaybackInfo`) and for the
-  no-picker-selection case (where the global Settings cap was used).
-  Even when present, the primary control is the `TranscodingUrl`; this
-  field exists in case a future receiver path consults it directly.
+> **Historical note.** v1.0.0–v1.2.0 instead delegated to the official
+> Jellyfin Chromecast receiver (app ID `F007D354`) via its custom
+> message protocol (`urn:x-cast:com.connectsdk`, `Identify` +
+> `PlayNow` JSON). That receiver renegotiates the stream with its own
+> device profile and bandwidth detection, which is why the quality
+> picker couldn't be made authoritative under that architecture. The
+> protocol details remain documented in this file's git history
+> (v1.2.0 and earlier) for anyone who needs them.
 
 ### Quality picker
 
@@ -326,12 +286,13 @@ override is **not** persisted (it's per-cast).
 
 The picker's values are stashed on the `CastManager` singleton's
 `pendingBitrate: PlaybackBitrate?` and `pendingAudioStreamIndex`
-properties. The next `load(item:)` reads them — `pendingBitrate` feeds
-into `MediaPlayerItem.build(requestedBitrate:)`, while
-`pendingAudioStreamIndex` overrides the audio index baked into the
-rebuilt item. Both are cleared in `sessionManager(_:didEnd:)` so a
-cancelled or interrupted session can't leak stale values into the next
-cast attempt.
+properties. The next `load(item:)` reads `pendingBitrate` and feeds it
+into `MediaPlayerItem.build(requestedBitrate:)`. As of v1.3.0,
+`pendingAudioStreamIndex` is **not yet forwarded** into the negotiated
+stream (see "What this fork does NOT do") — the audio selector is
+currently cosmetic. Both values are cleared in
+`sessionManager(_:didEnd:)` so a cancelled or interrupted session
+can't leak stale values into the next cast attempt.
 
 ### Why a custom button instead of `GCKUICastButton`
 
