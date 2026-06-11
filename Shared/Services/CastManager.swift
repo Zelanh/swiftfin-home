@@ -101,6 +101,20 @@ final class CastManager: NSObject, ObservableObject {
         context.discoveryManager.startDiscovery()
     }
 
+    /// Aggressively re-kick device discovery. iOS's mDNS stack is lazy on a
+    /// cold start: if no app recently triggered a scan it won't respond
+    /// promptly, which is why the Cast affordance historically only appeared
+    /// after opening Google Home. A `stop` + delayed `start` cycle wakes it.
+    /// Called from views that want the Cast button to appear reliably
+    /// (the in-player button and the item-detail action row).
+    func refreshDiscovery() {
+        let manager = GCKCastContext.sharedInstance().discoveryManager
+        manager.stopDiscovery()
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+            manager.startDiscovery()
+        }
+    }
+
     // MARK: - Media Loading
 
     /// Send a `PlayNow` command to the Jellyfin receiver via its custom namespace.

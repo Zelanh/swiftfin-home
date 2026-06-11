@@ -24,6 +24,16 @@ extension ItemView {
         @ObservedObject
         var viewModel: ItemViewModel
 
+        // Fork addition: observe Cast availability so the Cast button can be
+        // shown only when a device is around, and drive discovery from here
+        // (this row is always present on the detail page, unlike the button
+        // itself which is conditionally mounted).
+        @InjectedObject(\.castManager)
+        private var castManager: CastManager
+
+        @Environment(\.scenePhase)
+        private var scenePhase
+
         var equalSpacing: Bool = true
 
         // MARK: - Has Trailers
@@ -108,12 +118,28 @@ extension ItemView {
 
                 // MARK: - Cast to Chromecast (fork addition)
 
-                CastActionButton(viewModel: viewModel)
+                // Only present when a Cast device is available (or a session
+                // is active), so the row has no reserved/empty slot otherwise
+                // — the button simply appears once discovery finds a device.
+                if castManager.hasAvailableDevices || castManager.isSessionActive {
+                    CastActionButton(viewModel: viewModel)
+                        .frame(maxWidth: .infinity)
+                        .if(!equalSpacing) { view in
+                            view.aspectRatio(1, contentMode: .fit)
+                        }
+                }
             }
             .font(.title3)
             .fontWeight(.semibold)
             .buttonStyle(.material)
             .labelStyle(.iconOnly)
+            // Kick discovery while the detail page is shown so the Cast button
+            // appears without the user first opening Google Home (the button
+            // is conditionally mounted, so it can't drive discovery itself).
+            .onAppear { castManager.refreshDiscovery() }
+            .onChange(of: scenePhase) { newPhase in
+                if newPhase == .active { castManager.refreshDiscovery() }
+            }
         }
     }
 }

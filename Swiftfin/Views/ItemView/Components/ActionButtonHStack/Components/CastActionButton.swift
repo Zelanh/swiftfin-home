@@ -16,18 +16,15 @@ extension ItemView {
     /// Cast affordance shown on the item-detail page, alongside Played /
     /// Favorite / Version / Trailer. Lets the user cast **without playing
     /// locally first**, which avoids the wasted second transcode the
-    /// in-player Cast flow incurs (local playback fires one transcode, then
-    /// casting fires another).
+    /// in-player Cast flow incurs.
     ///
-    /// Flow: tap → quality picker sheet → native device dialog → once a Cast
-    /// session starts, hand the item to `CastManager.castFromDetail`. Playback
-    /// is then driven by the native Cast controls (the in-app player is never
-    /// opened — this is the deliberate "Option A" design).
-    ///
-    /// Always mounted (even when no Cast device is around) so its discovery
-    /// kick runs and the button can appear without the user having to open
-    /// Google Home first — matching the in-player `CastButtonView` behaviour.
-    /// When no device is available it collapses to zero size.
+    /// `ActionButtonHStack` only mounts this when a Cast device is available
+    /// (or a session is already active), and it also drives device discovery.
+    /// So this view doesn't gate its own visibility — when it exists, a device
+    /// exists. It just renders the button, runs the quality picker, and once a
+    /// Cast session starts hands the item to `CastManager.castFromDetail`.
+    /// Playback is then driven by the native Cast controls (the in-app player
+    /// is never opened — the deliberate "Option A" design).
     struct CastActionButton: View {
 
         @InjectedObject(\.castManager)
@@ -35,9 +32,6 @@ extension ItemView {
 
         @ObservedObject
         var viewModel: ItemViewModel
-
-        @Environment(\.scenePhase)
-        private var scenePhase
 
         @State
         private var showingQualityPicker = false
@@ -67,65 +61,46 @@ extension ItemView {
             viewModel.selectedMediaSource?.mediaStreams?.filter { $0.type == .audio } ?? []
         }
 
-        private var isVisible: Bool {
-            (castManager.hasAvailableDevices || castManager.isSessionActive) && castTarget != nil
-        }
-
         // MARK: - Body
 
         var body: some View {
-            // The button is ALWAYS rendered (never conditionally removed) so
-            // its `.onAppear` reliably fires and kicks device discovery — a
-            // zero-size / absent view does not fire `.onAppear`, which would
-            // mean discovery never runs and the button never appears (the
-            // device is only "available" once discovery finds it). When no
-            // device is around we collapse it to zero width + invisible
-            // instead, mirroring how the in-player `CastButtonView` stays
-            // mounted at 28×28 with opacity 0.
             Button("Cast", systemImage: castManager.isSessionActive ? "tv.fill" : "tv") {
                 handleTap()
             }
-            .frame(maxWidth: isVisible ? .infinity : 0)
-            .opacity(isVisible ? 1 : 0)
-            .disabled(!isVisible)
-            .accessibilityHidden(!isVisible)
-                .onAppear(perform: refreshDiscovery)
-                .onDisappear {
-                    // Drop any un-consumed cast intent if the user navigates
-                    // away after confirming but before a session started
-                    // (e.g. they cancelled the device dialog). Prevents a
-                    // stale intent from later casting the wrong item.
-                    awaitingSessionForCast = false
-                }
-                .onChange(of: scenePhase) { newPhase in
-                    if newPhase == .active { refreshDiscovery() }
-                }
-                .onChange(of: castManager.isSessionActive) { isActive in
-                    guard isActive, awaitingSessionForCast else { return }
-                    awaitingSessionForCast = false
-                    if let target = castTarget {
-                        castManager.castFromDetail(
-                            baseItem: target.baseItem,
-                            mediaSource: target.mediaSource
-                        )
-                    }
-                }
-                .sheet(isPresented: $showingQualityPicker, onDismiss: presentCastDialogIfConfirmed) {
-                    CastQualityPickerView(
-                        audioStreams: audioStreams,
-                        initialAudioStreamIndex: viewModel.selectedMediaSource?.defaultAudioStreamIndex,
-                        onConfirm: { bitrate, audioIndex in
-                            castManager.pendingBitrate = bitrate
-                            castManager.pendingAudioStreamIndex = audioIndex
-                            shouldPresentCastDialogAfterDismiss = true
-                            awaitingSessionForCast = true
-                            showingQualityPicker = false
-                        },
-                        onCancel: {
-                            showingQualityPicker = false
-                        }
+            .disabled(castTarget == nil)
+            .onDisappear {
+                // Drop any un-consumed cast intent if the user navigates away
+                // after confirming but before a session started (e.g. they
+                // cancelled the device dialog), so a stale intent can't later
+                // cast the wrong item.
+                awaitingSessionForCast = false
+            }
+            .onChange(of: castManager.isSessionActive) { isActive in
+                guard isActive, awaitingSessionForCast else { return }
+                awaitingSessionForCast = false
+                if let target = castTarget {
+                    castManager.castFromDetail(
+                        baseItem: target.baseItem,
+                        mediaSource: target.mediaSource
                     )
                 }
+            }
+            .sheet(isPresented: $showingQualityPicker, onDismiss: presentCastDialogIfConfirmed) {
+                CastQualityPickerView(
+                    audioStreams: audioStreams,
+                    initialAudioStreamIndex: viewModel.selectedMediaSource?.defaultAudioStreamIndex,
+                    onConfirm: { bitrate, audioIndex in
+                        castManager.pendingBitrate = bitrate
+                        castManager.pendingAudioStreamIndex = audioIndex
+                        shouldPresentCastDialogAfterDismiss = true
+                        awaitingSessionForCast = true
+                        showingQualityPicker = false
+                    },
+                    onCancel: {
+                        showingQualityPicker = false
+                    }
+                )
+            }
         }
 
         // MARK: - Actions
@@ -143,17 +118,6 @@ extension ItemView {
             guard shouldPresentCastDialogAfterDismiss else { return }
             shouldPresentCastDialogAfterDismiss = false
             _ = GCKCastContext.sharedInstance().presentCastDialog()
-        }
-
-        /// Same aggressive discovery kick as `CastButtonView`: iOS's mDNS is
-        /// lazy on cold start, so a stop/start cycle wakes it up and the
-        /// button appears without needing to open Google Home first.
-        private func refreshDiscovery() {
-            let manager = GCKCastContext.sharedInstance().discoveryManager
-            manager.stopDiscovery()
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
-                manager.startDiscovery()
-            }
         }
     }
 }
