@@ -208,6 +208,15 @@ final class CastManager: NSObject, ObservableObject {
 
         let metadata = GCKMediaMetadata(metadataType: .movie)
         metadata.setString(castItem.baseItem.name ?? "", forKey: kGCKMetadataKeyTitle)
+        // Attach the poster so the mini controller and expanded controls show
+        // artwork — the receiver and the iOS cast UI render exactly what the
+        // sender provides, so with no image there was no artwork.
+        if let posterURL = castItem.baseItem.imageSource(
+            .primary,
+            environment: ImageSourceOptions(maxWidth: 600)
+        ).url {
+            metadata.addImage(GCKImage(url: posterURL, width: 600, height: 900))
+        }
         builder.metadata = metadata
 
         let loadOptions = GCKMediaLoadOptions()

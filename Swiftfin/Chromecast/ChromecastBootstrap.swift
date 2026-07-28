@@ -25,7 +25,15 @@ enum ChromecastBootstrap {
         // the bitrate cap Jellyfin already baked into the stream.
         let criteria = GCKDiscoveryCriteria(applicationID: kGCKDefaultMediaReceiverApplicationID)
         let options = GCKCastOptions(discoveryCriteria: criteria)
+        // Let the phone's physical volume buttons control the TV volume while casting.
+        options.physicalVolumeButtonsWillControlDeviceVolume = true
         GCKCastContext.setSharedInstanceWith(options)
+
+        // Tapping the mini controller opens the SDK's default expanded controls
+        // (with the scrubber / time slider). Without this the mini controller is
+        // inert. This flag lived in the old AppDelegate bootstrap and was lost
+        // in the port — restoring it is what makes the time slider open again.
+        GCKCastContext.sharedInstance().useDefaultExpandedMediaControls = true
 
         // Eagerly instantiate the CastManager singleton so device discovery
         // starts at launch. iOS's mDNS/Bonjour stack is lazy on a cold start;
