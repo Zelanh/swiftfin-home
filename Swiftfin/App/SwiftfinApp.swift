@@ -16,6 +16,12 @@ struct SwiftfinApp: App {
     init() {
         Self.configure()
 
+        #if os(iOS)
+        // [Chromecast fork] Bootstrap the GoogleCast SDK and warm device
+        // discovery at launch. See Swiftfin/Chromecast/ChromecastBootstrap.
+        ChromecastBootstrap.configure()
+        #endif
+
         UIScrollView.appearance().keyboardDismissMode = .onDrag
 
         // Sometimes the tab bar won't appear properly on push, always have material background.

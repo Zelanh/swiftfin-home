@@ -18,6 +18,17 @@ struct VideoPlayer: View {
     @InjectedObject(\.mediaPlayerManager)
     private var manager: MediaPlayerManager
 
+    #if os(iOS)
+    // [Chromecast fork] Cast session + the proxy used while it's active. See
+    // `activeProxy` and the "Cast session activation" onChange below.
+    @InjectedObject(\.castManager)
+    private var castManager: CastManager
+
+    /// Non-nil only while a Cast session is active.
+    @State
+    private var castProxy: ChromecastMediaPlayerProxy? = nil
+    #endif
+
     @LazyState
     private var proxy: any VideoMediaPlayerProxy
 
@@ -43,12 +54,25 @@ struct VideoPlayer: View {
         self._proxy = .init(wrappedValue: VLCMediaPlayerProxy())
     }
 
+    // [Chromecast fork] The proxy currently driving the on-screen body and the
+    // overlay's direct seek/aspect/offset calls. Routes to the Cast proxy while
+    // a session is active (so the overlay controls the TV and the body shows
+    // "Casting to …"); otherwise the normal local proxy.
+    private var activeProxy: any VideoMediaPlayerProxy {
+        #if os(iOS)
+        if let castProxy, castManager.isSessionActive {
+            return castProxy
+        }
+        #endif
+        return proxy
+    }
+
     var body: some View {
         VideoPlayerContainerView(
             containerState: containerState,
             manager: manager
         ) {
-            proxy.videoPlayerBody
+            activeProxy.videoPlayerBody // [Chromecast fork] was `proxy`
                 .eraseToAnyView()
         } playbackControls: {
             PlaybackControls()
@@ -58,16 +82,47 @@ struct VideoPlayer: View {
             manager.start()
         }
         .prefersStatusBarHidden(!containerState.isPresentingOverlay)
+        #if os(iOS)
+        // [Chromecast fork] Cast session activation: swap the manager's proxy
+        // to Cast, pause local VLC, and mirror the current item onto the
+        // receiver. On end, restore VLC and resume near where Cast left off.
+        .backport
+        .onChange(of: castManager.isSessionActive) { _, isActive in
+            if isActive {
+                let newProxy = ChromecastMediaPlayerProxy()
+                castProxy = newProxy
+                manager.proxy = newProxy
+
+                // Pause local VLC — its view is also removed from the tree.
+                proxy.pause()
+
+                if let item = manager.playbackItem {
+                    castManager.load(item: item)
+                }
+            } else {
+                castProxy = nil
+                manager.proxy = proxy
+
+                if let resumeAt = castManager.castEndedPosition {
+                    Task { @MainActor in
+                        // Give VLC a moment to re-enter the tree before seeking.
+                        try? await Task.sleep(for: .milliseconds(800))
+                        proxy.setSeconds(resumeAt)
+                    }
+                }
+            }
+        }
+        #endif
         .backport
         .onChange(of: audioOffset) { _, newValue in
-            if let proxy = proxy as? MediaPlayerOffsetConfigurable {
+            if let proxy = activeProxy as? MediaPlayerOffsetConfigurable { // [Chromecast fork] activeProxy
                 proxy.setAudioOffset(newValue)
             }
         }
         .backport
         .onChange(of: containerState.isAspectFilled) { _, newValue in
             UIView.animate(withDuration: 0.2) {
-                proxy.setAspectFill(newValue)
+                activeProxy.setAspectFill(newValue) // [Chromecast fork] activeProxy
             }
         }
         .backport
@@ -84,11 +139,11 @@ struct VideoPlayer: View {
 
             let scrubbedSeconds = containerState.scrubbedSeconds.value
             manager.seconds = scrubbedSeconds
-            proxy.setSeconds(scrubbedSeconds)
+            activeProxy.setSeconds(scrubbedSeconds) // [Chromecast fork] activeProxy
         }
         .backport
         .onChange(of: subtitleOffset) { _, newValue in
-            if let proxy = proxy as? MediaPlayerOffsetConfigurable {
+            if let proxy = activeProxy as? MediaPlayerOffsetConfigurable { // [Chromecast fork] activeProxy
                 proxy.setSubtitleOffset(newValue)
             }
         }
@@ -100,6 +155,14 @@ struct VideoPlayer: View {
         .onChange(of: presentationCoordinator.isPresented) { _, isPresented in
             guard !isPresented else { return }
             isBeingDismissedByTransition = true
+
+            #if os(iOS)
+            // [Chromecast fork] End the Cast session when the player is dismissed.
+            if castManager.isSessionActive {
+                castManager.endSession()
+            }
+            #endif
+
             manager.stop()
         }
         .onReceive(manager.$playbackItem) { newItem in
@@ -109,6 +172,14 @@ struct VideoPlayer: View {
 
             // TODO: move to container view
             containerState.scrubbedSeconds.value = newItem?.baseItem.startSeconds ?? .zero
+
+            #if os(iOS)
+            // [Chromecast fork] If Cast is active when the next queue item
+            // starts, load it on the receiver too.
+            if castManager.isSessionActive, let item = newItem {
+                castManager.load(item: item)
+            }
+            #endif
         }
         .onReceive(manager.$state) { newState in
             if newState == .stopped, !isBeingDismissedByTransition {

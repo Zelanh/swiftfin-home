@@ -26,6 +26,12 @@ extension MediaPlayerItem {
         videoPlayerType: VideoPlayerType = Defaults[.VideoPlayer.videoPlayerType],
         requestedBitrate: PlaybackBitrate = Defaults[.VideoPlayer.Playback.appMaximumBitrate],
         compatibilityMode: PlaybackCompatibility = Defaults[.VideoPlayer.Playback.compatibilityMode],
+        // [Chromecast fork] Additive override used only by the isolated Cast
+        // integration (Swiftfin/Chromecast/CastManager). When provided, this
+        // exact profile is used instead of the derived one, with the requested
+        // bitrate cap applied — so the Cast quality picker actually controls the
+        // transcode. Harmless (defaults to nil) for all normal playback.
+        customDeviceProfile: DeviceProfile? = nil,
         modifyItem: ((inout BaseItemDto) -> Void)? = nil
     ) async throws -> MediaPlayerItem {
 
@@ -65,11 +71,21 @@ extension MediaPlayerItem {
 
         let maxBitrate = try await MediaPlayerManager.getMaxBitrate(for: requestedBitrate)
 
-        let deviceProfile = DeviceProfile.build(
-            for: videoPlayerType,
-            compatibilityMode: compatibilityMode,
-            maxBitrate: maxBitrate
-        )
+        // [Chromecast fork] Use the caller-supplied profile when present (Cast
+        // path), otherwise derive it exactly as upstream does.
+        let deviceProfile: DeviceProfile = {
+            if var customDeviceProfile {
+                customDeviceProfile.maxStaticBitrate = maxBitrate
+                customDeviceProfile.maxStreamingBitrate = maxBitrate
+                customDeviceProfile.musicStreamingTranscodingBitrate = maxBitrate
+                return customDeviceProfile
+            }
+            return DeviceProfile.build(
+                for: videoPlayerType,
+                compatibilityMode: compatibilityMode,
+                maxBitrate: maxBitrate
+            )
+        }()
 
         var playbackInfo = PlaybackInfoDto()
         playbackInfo.isAutoOpenLiveStream = true

@@ -77,6 +77,13 @@ extension VideoPlayer.PlaybackControls {
                 TitleView(item: manager.item)
                     .frame(maxWidth: .infinity, alignment: .leading)
 
+                #if os(iOS)
+                // [Chromecast fork] In-player Cast affordance (hidden until a
+                // device is discovered; see Swiftfin/Chromecast/CastButtonView).
+                CastButtonView()
+                    .frame(width: Self.buttonSize, height: Self.buttonSize)
+                #endif
+
                 ActionButtons()
                     .frame(height: Self.buttonSize)
                     .padding(.horizontal)

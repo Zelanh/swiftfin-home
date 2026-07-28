@@ -7,6 +7,9 @@
 //
 
 import SwiftUI
+#if os(iOS)
+import FactoryKit // [Chromecast fork]
+#endif
 
 extension ItemView {
 
@@ -20,6 +23,15 @@ extension ItemView {
 
         @StoredValue(.User.enabledTrailers)
         private var enabledTrailers: TrailerSelection
+
+        #if os(iOS)
+        // [Chromecast fork] Drives the poppable Cast button below: observes
+        // device availability so the button appears/disappears live, and this
+        // view kicks discovery on appear (the parent owns discovery so the
+        // button never depends on its own zero-size onAppear firing).
+        @InjectedObject(\.castManager)
+        private var castManager: CastManager
+        #endif
 
         private var hasTrailers: Bool {
             if enabledTrailers.contains(.local), provider.localTrailers.isNotEmpty {
@@ -122,6 +134,18 @@ extension ItemView {
                     .isSelected(isFavorited)
                 }
 
+                // MARK: Cast [Chromecast fork]
+                //
+                // Poppable: only mounts when a Cast device is available (or a
+                // session is already active). Discovery is kicked from this
+                // parent's .onAppear below.
+
+                #if os(iOS)
+                if castManager.hasAvailableDevices || castManager.isSessionActive {
+                    CastActionButton(provider: provider)
+                }
+                #endif
+
                 // MARK: Trailer
 
                 if hasTrailers {
@@ -161,6 +185,10 @@ extension ItemView {
             .buttonStyle(BasicHoverButtonStyle())
             .font(.title3)
             .fontWeight(.semibold)
+            #if os(iOS)
+            // [Chromecast fork] Warm Cast discovery so the button can pop in.
+            .onAppear { castManager.refreshDiscovery() }
+            #endif
         }
     }
 }
