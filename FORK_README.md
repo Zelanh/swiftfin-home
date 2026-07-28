@@ -23,7 +23,8 @@
 
 ## What this fork does
 
-- Adds a Cast button to the iOS video player's navigation bar.
+- Adds a Cast button in **two places**: on the item detail page (cast
+  without playing locally first) and in the iOS video player's overlay.
 - Tapping the Cast button opens a **quality picker** sheet exposing the
   same bitrate tiers (including `Auto` with its network speed test) as
   Swiftfin's Settings → Playback Quality, then hands off to the standard
@@ -47,12 +48,14 @@
 A few small things to know that aren't bugs but can surprise first-time
 users. Skim these before assuming something is broken:
 
-- **You must start playback first.** The Cast button lives inside the
-  video player's navigation overlay, not on the browse / item info
-  screens. Open a movie or episode, start playing it locally, *then* the
-  Cast button becomes available in the player toolbar. Most other
-  Jellyfin clients expose Cast from earlier screens; this fork does not
-  (yet — see the TODO section at the end of the file).
+- **Two ways to cast.** There's a Cast button on the item detail page
+  (next to Played / Favorite), so you can cast a movie or episode
+  **without playing it locally first** — the app negotiates the stream
+  and hands it straight to the Chromecast, avoiding a wasted local
+  transcode. There's also a Cast button inside the video player's
+  overlay, for when you're already watching locally and want to push it
+  to the TV. Both appear only once a Chromecast is discovered on the
+  network.
 - **The Cast button may take a few seconds to appear after entering the
   player.** Device discovery uses mDNS / Bonjour and only starts when
   the player loads. On a typical home WiFi the Chromecast is usually
@@ -114,8 +117,10 @@ users. Skim these before assuming something is broken:
 - **No automated signing in CI.** The IPA artifact produced by GitHub
   Actions is **unsigned**. You re-sign it yourself with Sideloadly /
   3uTools / AltStore / Apple Developer cert.
-- **Not synced with upstream.** Whatever Swiftfin version this was forked
-  from is what it stays at unless someone manually rebases.
+- **Periodically synced with upstream, not continuously.** v1.5.0 was
+  rebased onto a fresh upstream Swiftfin. It won't track upstream
+  automatically, but the isolated `Chromecast/` layout (see "Source
+  layout" below) is designed to make the next re-sync straightforward.
 
 ---
 
@@ -130,24 +135,42 @@ users. Skim these before assuming something is broken:
 `ChromeCastFramework.json` is a local Carthage binary manifest that points
 to `https://dl.google.com/dl/chromecast/sdk/ios/GoogleCastSDK-ios-4.8.3_dynamic.zip`.
 
-### Source files added
+### Source layout (v1.5.0 — isolated)
+
+As of v1.5.0 **all** Cast code lives in one folder, `Swiftfin/Chromecast/`
+(iOS-only, since it sits under the iOS synchronized file group). This keeps
+the fork's footprint on upstream files tiny and makes future upstream
+merges easy: everything in `Chromecast/` is ours, and every single touch
+to a base file is tagged with a `// [Chromecast fork]` comment so the whole
+surface can be found with one `grep`.
+
+**Our folder — `Swiftfin/Chromecast/`:**
 
 ```
-Shared/Services/CastManager.swift
-Shared/Objects/MediaPlayerManager/MediaPlayerProxy/MediaPlayerProxy+Chromecast.swift
-Swiftfin/Views/Cast/CastButtonView.swift
-Swiftfin/Views/Cast/CastQualityPickerView.swift
+CastManager.swift                 # session lifecycle, load(), quality/audio state
+ChromecastMediaPlayerProxy.swift  # VideoMediaPlayerProxy that drives the cast
+CastButtonView.swift              # in-player Cast button
+CastActionButton.swift            # item-detail Cast button (cast without playing first)
+CastQualityPickerView.swift       # bitrate + audio picker sheet
+DeviceProfile+Chromecast.swift    # buildChromecast() profile (pure extension, zero base touch)
+ChromecastBootstrap.swift         # GCKCastContext bootstrap (replaces the old AppDelegate)
 ```
 
-### Source files modified
+**Base files touched — all `#if os(iOS)`-guarded and marked `[Chromecast fork]`:**
 
 ```
-Swiftfin/App/AppDelegate.swift                 # GCKCastContext bootstrap (default Google receiver)
-Shared/Components/VideoPlayer.swift            # proxy switching on isSessionActive
-Swiftfin/Views/VideoPlayerContainerView/PlaybackControls/Components/NavigationBar/NavigationBar.swift  # CastButtonView placement
-Shared/Extensions/JellyfinAPI/DeviceProfile.swift  # additive: buildChromecast() profile
-Shared/Objects/MediaPlayerManager/MediaPlayerItem/MediaPlayerItem+Build.swift  # optional customDeviceProfile: param
-Cartfile                                       # ChromeCastFramework binary
+Swiftfin/App/SwiftfinApp.swift                          # 1 line: ChromecastBootstrap.configure()
+Shared/Objects/.../MediaPlayerItem/MediaPlayerItem+Build.swift  # additive customDeviceProfile: param
+Shared/Views/ItemView/.../ActionButtonHStack.swift      # mount the poppable detail Cast button + kick discovery
+Shared/Views/VideoPlayer/VideoPlayer.swift              # cast/local proxy switch on isSessionActive
+Shared/Views/VideoPlayer/.../VideoPlayer+Toolbar.swift  # in-player CastButtonView placement
+Cartfile                                                # ChromeCastFramework binary (uncommented)
+```
+
+See every base-file hook at once:
+
+```
+grep -rn "\[Chromecast fork\]" Shared Swiftfin --include="*.swift"
 ```
 
 ### Project file changes (`Swiftfin.xcodeproj/project.pbxproj`)
@@ -164,7 +187,7 @@ Cartfile                                       # ChromeCastFramework binary
 A new workflow that produces an unsigned IPA artifact. Key differences
 from the upstream `ci.yml` (which is left untouched):
 
-- Triggers on `push` to `main` and `feature/**` branches.
+- Triggers on `push` to `main`, `feature/**`, and `chore/**` branches.
 - Selects **Xcode 26.3** on `macos-15` runners (it ships with iOS 26.2 SDK).
 - Trusts Swift macros for headless CI:
   ```
