@@ -7,7 +7,7 @@
 //
 
 import CoreStore
-import Defaults
+import FactoryKit
 import Logging
 import Nuke
 import PulseLogHandler
@@ -16,10 +16,6 @@ import UIKit
 extension SwiftfinApp {
 
     static func configure() {
-
-        #if DEBUG
-        SwizzleDefaults.set(Defaults[.isLiquidGlassEnabled], for: "com.apple.SwiftUI.IgnoreSolariumOptOut")
-        #endif
 
         // Logging
         LoggingSystem.bootstrap { label in
@@ -52,12 +48,5 @@ extension SwiftfinApp {
         }
 
         ImagePipeline.shared = .Swiftfin.posters
-
-        // Swiftfin
-
-        // Don't keep last user id.
-        if Defaults[.signOutOnClose] {
-            Defaults[.lastSignedInUserID] = .signedOut
-        }
     }
 }

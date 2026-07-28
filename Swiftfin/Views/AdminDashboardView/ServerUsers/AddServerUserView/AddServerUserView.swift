@@ -95,7 +95,8 @@ struct AddServerUserView: View {
         .animation(.linear(duration: 0.1), value: isValid)
         .interactiveDismissDisabled(viewModel.state == .addingUser)
         .navigationTitle(L10n.newUser.localizedCapitalized)
-        .navigationBarTitleDisplayMode(.inline)
+        .backport
+        .toolbarTitleDisplayMode(.inline)
         .navigationBarCloseButton(disabled: viewModel.state != .initial) {
             router.dismiss()
         }
@@ -113,16 +114,33 @@ struct AddServerUserView: View {
         .topBarTrailing {
             if viewModel.state == .addingUser {
                 ProgressView()
-                Button(L10n.cancel) {
+
+                Button(L10n.cancel, role: .cancel) {
                     viewModel.cancel()
                 }
-                .buttonStyle(.toolbarPill(.red))
+                .foregroundStyle(.primary, .secondary)
+                .backport
+                .buttonStyle(.glass)
+                .controlSize(.small)
             } else {
-                Button(L10n.save) {
+                let saveAction: () -> Void = {
                     viewModel.add(username: username, password: password)
                 }
-                .buttonStyle(.toolbarPill)
-                .disabled(!isValid)
+
+                if #available(iOS 26, *) {
+                    Button(
+                        L10n.save,
+                        role: .confirm,
+                        action: saveAction
+                    )
+                    .enabled(isValid)
+                } else {
+                    Button(L10n.save, action: saveAction)
+                        .backport
+                        .buttonStyle(.glassProminent)
+                        .controlSize(.small)
+                        .enabled(isValid)
+                }
             }
         }
         .errorMessage($viewModel.error) {

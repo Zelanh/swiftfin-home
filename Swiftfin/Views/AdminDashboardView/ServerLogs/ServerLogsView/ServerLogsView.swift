@@ -84,7 +84,16 @@ struct ServerLogsView: View {
             viewModel.refresh(filter: filter)
         }
         .topBarTrailing {
-            Menu(L10n.filters, systemImage: "line.3.horizontal.decrease.circle") {
+            let systemImage = if #available(iOS 26, *) {
+                "line.3.horizontal.decrease"
+            } else {
+                "line.3.horizontal.decrease.circle"
+            }
+
+            Menu(
+                L10n.filters,
+                systemImage: systemImage
+            ) {
                 Picker(selection: $filter) {
                     Label(L10n.all, systemImage: "line.3.horizontal")
                         .tag(nil as ServerLogType?)
