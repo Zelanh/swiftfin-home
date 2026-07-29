@@ -1,3 +1,10 @@
+> 🔱 **This is an unofficial fork of Swiftfin with Chromecast support added for the iOS app.**
+> See **[FORK_README.md](./FORK_README.md)** for what this fork changes, why, and the important disclaimers (AI-assisted, personal use, not affiliated with Jellyfin).
+> The rest of this README below is the **original upstream Swiftfin README**, kept intact for attribution and reference.
+>
+> ---
+
+
 <div align="center">
   <img alt="Swiftfin" src="./Resources/primary-wide.svg">
 
