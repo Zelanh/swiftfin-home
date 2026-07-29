@@ -63,39 +63,26 @@ extension MediaPeopleSupplement {
                 uniqueElements: people,
                 layout: .columns(
                     1,
-                    insets: .init(top: 0, leading: 0, bottom: EdgeInsets.edgePadding, trailing: 0)
+                    insets: .init(EdgeInsets.edgePadding)
                 )
             ) { person, _ in
                 PersonRow(person: person)
-                    .edgePadding(.horizontal)
             }
         }
 
         @ViewBuilder
         private func personView(for person: BaseItemPerson) -> some View {
-            #if os(iOS)
             PosterButton(
                 item: person,
-                type: .portrait
-            ) { _ in
-            } label: {
-                PosterButton<BaseItemPerson>.TitleSubtitleContentView(item: person)
-            }
-            #else
-            PosterButton(
-                item: person,
-                type: .portrait
-            ) {} label: {
-                PosterButton<BaseItemPerson>.TitleSubtitleContentView(item: person)
-            }
-            #endif
+                displayType: .portrait
+            ) { _ in }
         }
 
         @ViewBuilder
         private var iOSRegularView: some View {
             CollectionHStack(
                 uniqueElements: people,
-                id: \.unwrappedIDHashOrZero,
+                id: \.id,
                 layout: .minimumWidth(columnWidth: 80, rows: 1)
             ) { person in
                 personView(for: person)
@@ -107,17 +94,21 @@ extension MediaPeopleSupplement {
         }
 
         var tvOSView: some View {
-            CollectionHStack(
+            CollectionVGrid(
                 uniqueElements: people,
-                id: \.unwrappedIDHashOrZero,
-                columns: 7
+                id: \.id,
+                layout: .columns(
+                    10,
+                    insets: .init(EdgeInsets.edgePadding),
+                    itemSpacing: EdgeInsets.edgePadding,
+                    lineSpacing: EdgeInsets.edgePadding
+                )
             ) { person in
                 personView(for: person)
+                    .padding(.horizontal, 4)
             }
-            .clipsToBounds(false)
-            .insets(horizontal: max(safeAreaInsets.leading, safeAreaInsets.trailing) + EdgeInsets.edgePadding)
-            .itemSpacing(EdgeInsets.edgePadding - 20)
-            .scrollBehavior(.continuousLeadingEdge)
+            .ignoresSafeArea(.container, edges: .horizontal)
+            .focusSection()
         }
     }
 
@@ -153,8 +144,8 @@ extension MediaPeopleSupplement {
                 PosterImage(
                     item: person,
                     type: .portrait,
-                    contentMode: .fit,
-                    maxWidth: 60
+                    size: .extraSmall,
+                    contentMode: .fit
                 )
                 .frame(height: 90)
                 .padding(.vertical, 8)

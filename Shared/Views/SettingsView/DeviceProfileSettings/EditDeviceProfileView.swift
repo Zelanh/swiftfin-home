@@ -55,7 +55,7 @@ extension CustomDeviceProfilesView {
                     }
                 }
                 .topBarTrailing {
-                    Button(L10n.save) {
+                    let saveAction: () -> Void = {
                         if createProfile {
                             customDeviceProfiles.append(profile)
                         } else {
@@ -64,10 +64,22 @@ extension CustomDeviceProfilesView {
                         UIDevice.impact(.light)
                         router.dismiss()
                     }
+
+                    Group {
+                        #if os(iOS)
+                        if #available(iOS 26, *) {
+                            Button(L10n.save, role: .confirm, action: saveAction)
+                        } else {
+                            Button(L10n.save, action: saveAction)
+                                .backport
+                                .buttonStyle(.glassProminent)
+                                .controlSize(.small)
+                        }
+                        #else
+                        Button(L10n.save, action: saveAction)
+                        #endif
+                    }
                     .disabled(!isValid)
-                    #if os(iOS)
-                        .buttonStyle(.toolbarPill)
-                    #endif
                 }
             #if os(iOS)
                 .navigationBarBackButtonHidden()

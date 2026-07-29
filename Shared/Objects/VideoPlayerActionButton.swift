@@ -13,9 +13,11 @@ enum VideoPlayerActionButton: String, CaseIterable, Displayable, Equatable, Iden
     case aspectFill
     case audio
     case autoPlay
+    #if os(iOS)
     case gestureLock
+    #endif
     case playbackSpeed
-//    case playbackQuality
+    case playbackSettings
     case playNextItem
     case playPreviousItem
     case subtitles
@@ -28,12 +30,14 @@ enum VideoPlayerActionButton: String, CaseIterable, Displayable, Equatable, Iden
             L10n.audio
         case .autoPlay:
             L10n.autoPlay
+        #if os(iOS)
         case .gestureLock:
             L10n.gestureLock
+        #endif
         case .playbackSpeed:
             L10n.playbackSpeed
-//        case .playbackQuality:
-//            return L10n.playbackQuality
+        case .playbackSettings:
+            L10n.playback
         case .playNextItem:
             L10n.playNextItem
         case .playPreviousItem:
@@ -47,16 +51,16 @@ enum VideoPlayerActionButton: String, CaseIterable, Displayable, Equatable, Iden
         rawValue
     }
 
+    #if os(tvOS)
     var systemImage: String {
         switch self {
         case .aspectFill: "arrow.up.left.and.arrow.down.right"
-        case .audio: "speaker.wave.2.fill"
-        case .autoPlay: "play.circle.fill"
-        case .gestureLock: "lock.circle.fill"
+        case .audio: "speaker.wave.2"
+        case .autoPlay: "play.fill"
         case .playbackSpeed: "speedometer"
-//        case .playbackQuality: "tv.circle.fill"
-        case .playNextItem: "forward.end.circle.fill"
-        case .playPreviousItem: "backward.end.circle.fill"
+        case .playbackSettings: "tv"
+        case .playNextItem: "forward.end.fill"
+        case .playPreviousItem: "backward.end.fill"
         case .subtitles: "captions.bubble.fill"
         }
     }
@@ -65,13 +69,50 @@ enum VideoPlayerActionButton: String, CaseIterable, Displayable, Equatable, Iden
         switch self {
         case .aspectFill: "arrow.down.right.and.arrow.up.left"
         case .audio: "speaker.wave.2"
-        case .autoPlay: "stop.circle"
+        case .autoPlay: "stop.fill"
+        case .subtitles: "captions.bubble"
+        default:
+            systemImage
+        }
+    }
+    #else
+    var systemImage: String {
+        let usesLiquidGlassSymbols = if #available(iOS 26.0, *) {
+            true
+        } else {
+            false
+        }
+
+        return switch self {
+        case .aspectFill: "arrow.up.left.and.arrow.down.right"
+        case .audio: "speaker.wave.2.fill"
+        case .autoPlay: usesLiquidGlassSymbols ? "play.fill" : "play.circle.fill"
+        case .gestureLock: usesLiquidGlassSymbols ? "lock.fill" : "lock.circle.fill"
+        case .playbackSpeed: "speedometer"
+        case .playbackSettings: usesLiquidGlassSymbols ? "tv" : "tv.circle.fill"
+        case .playNextItem: usesLiquidGlassSymbols ? "forward.end.fill" : "forward.end.circle.fill"
+        case .playPreviousItem: usesLiquidGlassSymbols ? "backward.end.fill" : "backward.end.circle.fill"
+        case .subtitles: "captions.bubble.fill"
+        }
+    }
+
+    var secondarySystemImage: String {
+        switch self {
+        case .aspectFill: "arrow.down.right.and.arrow.up.left"
+        case .audio: "speaker.wave.2"
+        case .autoPlay:
+            if #available(iOS 26.0, *) {
+                "stop"
+            } else {
+                "stop.circle"
+            }
         case .gestureLock: "lock.open.fill"
         case .subtitles: "captions.bubble"
         default:
             systemImage
         }
     }
+    #endif
 
     static let defaultBarActionButtons: [VideoPlayerActionButton] = [
         .aspectFill,
@@ -84,5 +125,6 @@ enum VideoPlayerActionButton: String, CaseIterable, Displayable, Equatable, Iden
         .audio,
         .subtitles,
         .playbackSpeed,
+        .playbackSettings,
     ]
 }

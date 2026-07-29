@@ -30,28 +30,6 @@ struct LearnMoreLabeledContentStyle: LabeledContentStyle {
     }
 }
 
-extension LabeledContentStyle where Self == ItemAttributeLabeledContentStyle {
-
-    static var itemAttribute: ItemAttributeLabeledContentStyle {
-        ItemAttributeLabeledContentStyle()
-    }
-}
-
-struct ItemAttributeLabeledContentStyle: LabeledContentStyle {
-
-    func makeBody(configuration: Configuration) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
-            configuration.label
-                .font(.headline)
-                .foregroundStyle(.primary)
-
-            configuration.content
-                .font(.footnote)
-                .foregroundStyle(.secondary)
-        }
-    }
-}
-
 extension LabeledContentStyle where Self == DeviceProfileLabeledContentStyle {
 
     static var deviceProfile: DeviceProfileLabeledContentStyle {
@@ -84,6 +62,9 @@ extension LabeledContentStyle where Self == PlaybackInfoLabeledContentStyle {
 
 struct PlaybackInfoLabeledContentStyle: LabeledContentStyle {
 
+    @FocusState
+    private var isFocused: Bool
+
     func makeBody(configuration: Configuration) -> some View {
         HStack(spacing: 0) {
             configuration.label
@@ -100,6 +81,19 @@ struct PlaybackInfoLabeledContentStyle: LabeledContentStyle {
                 .foregroundStyle(.primary)
         }
         .font(.subheadline)
+        .if(UIDevice.isTV) { label in
+            label
+                .padding(.horizontal, 8)
+                .padding(.vertical, 8)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 8)
+                        .fill(isFocused ? Color.white.opacity(0.15) : Color.clear)
+                )
+                .backport
+                .focusable()
+                .focused($isFocused)
+                .animation(.easeInOut(duration: 0.15), value: isFocused)
+        }
     }
 }
 

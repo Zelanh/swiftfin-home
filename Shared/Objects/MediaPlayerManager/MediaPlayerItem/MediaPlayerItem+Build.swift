@@ -7,7 +7,7 @@
 //
 
 import Defaults
-import Factory
+import FactoryKit
 import Foundation
 import JellyfinAPI
 import Logging
@@ -18,17 +18,19 @@ import Logging
 extension MediaPlayerItem {
 
     /// The main `MediaPlayerItem` builder for normal online usage.
-    ///
-    /// `customDeviceProfile` overrides the profile normally derived from
-    /// `videoPlayerType` + `compatibilityMode`. Used by the Chromecast flow,
-    /// which negotiates with a receiver-specific profile instead of the local
-    /// player's. The requested bitrate is applied to it the same way.
     static func build(
         for initialItem: BaseItemDto,
         mediaSource _initialMediaSource: MediaSourceInfo? = nil,
+        audioStreamIndex: Int? = nil,
+        subtitleStreamIndex: Int? = nil,
         videoPlayerType: VideoPlayerType = Defaults[.VideoPlayer.videoPlayerType],
         requestedBitrate: PlaybackBitrate = Defaults[.VideoPlayer.Playback.appMaximumBitrate],
         compatibilityMode: PlaybackCompatibility = Defaults[.VideoPlayer.Playback.compatibilityMode],
+        // [Chromecast fork] Additive override used only by the isolated Cast
+        // integration (Swiftfin/Chromecast/CastManager). When provided, this
+        // exact profile is used instead of the derived one, with the requested
+        // bitrate cap applied — so the Cast quality picker actually controls the
+        // transcode. Harmless (defaults to nil) for all normal playback.
         customDeviceProfile: DeviceProfile? = nil,
         modifyItem: ((inout BaseItemDto) -> Void)? = nil
     ) async throws -> MediaPlayerItem {
@@ -67,8 +69,10 @@ extension MediaPlayerItem {
             throw ErrorMessage(L10n.unknownError)
         }
 
-        let maxBitrate = try await requestedBitrate.getMaxBitrate()
+        let maxBitrate = try await MediaPlayerManager.getMaxBitrate(for: requestedBitrate)
 
+        // [Chromecast fork] Use the caller-supplied profile when present (Cast
+        // path), otherwise derive it exactly as upstream does.
         let deviceProfile: DeviceProfile = {
             if var customDeviceProfile {
                 customDeviceProfile.maxStaticBitrate = maxBitrate
@@ -89,6 +93,8 @@ extension MediaPlayerItem {
         playbackInfo.liveStreamID = initialMediaSource.liveStreamID
         playbackInfo.maxStreamingBitrate = maxBitrate
         playbackInfo.userID = userSession.user.id
+        playbackInfo.audioStreamIndex = audioStreamIndex
+        playbackInfo.subtitleStreamIndex = subtitleStreamIndex
 
         if !item.isLiveStream {
             playbackInfo.mediaSourceID = initialMediaSource.id
@@ -132,6 +138,8 @@ extension MediaPlayerItem {
         guard let mediaSource else {
             throw ErrorMessage("Unable to find media source for item")
         }
+
+        item.runTimeTicks = mediaSource.runTimeTicks ?? item.runTimeTicks
 
         guard let playSessionID = response.value.playSessionID else {
             throw ErrorMessage("No associated play session ID")
@@ -182,6 +190,9 @@ extension MediaPlayerItem {
             playSessionID: playSessionID,
             url: playbackURL,
             requestedBitrate: requestedBitrate,
+            deviceProfile: deviceProfile,
+            initialAudioStreamIndex: audioStreamIndex,
+            initialSubtitleStreamIndex: subtitleStreamIndex,
             previewImageProvider: previewImageProvider,
             thumbnailProvider: item.getNowPlayingImage
         )
@@ -217,9 +228,9 @@ extension MediaPlayerItem {
 
             let videoStreamParameters = Paths.GetVideoStreamParameters(
                 isStatic: true,
-                tag: item.etag,
+                tag: mediaSource.eTag ?? item.etag,
                 playSessionID: playSessionID,
-                mediaSourceID: itemID
+                mediaSourceID: mediaSource.id ?? itemID
             )
 
             let videoStreamRequest = Paths.getVideoStream(

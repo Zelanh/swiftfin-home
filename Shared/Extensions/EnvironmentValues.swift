@@ -11,16 +11,22 @@ import SwiftUI
 extension EnvironmentValues {
 
     @Entry
+    var enabledPosterIndicators: PosterIndicator = .all
+
+    @Entry
+    var useSeriesLandscapeBackdrop: Bool = true
+
+    @Entry
     var audioOffset: Binding<Duration> = .constant(.zero)
+
+    @Entry
+    var frameForParentView: [CoordinateSpace: FrameAndSafeAreaInsets] = [:]
 
     @Entry
     var isEditing: Bool = false
 
     @Entry
     var isHighlighted: Bool = true
-
-    @Entry
-    var isInMenu: Bool = false
 
     @Entry
     var isOverComplexContent: Bool = false
@@ -36,4 +42,8 @@ extension EnvironmentValues {
 
     @Entry
     var subtitleOffset: Binding<Duration> = .constant(.zero)
+
+    // TODO: figure out this directional response stuff
+    @Entry
+    var panGestureDirection: Direction = .all
 }

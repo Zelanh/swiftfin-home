@@ -76,76 +76,42 @@ extension DeviceProfile {
         return deviceProfile
     }
 
-    // MARK: - Chromecast
+    // MARK: - Playback Capability Queries
 
-    /// DeviceProfile for casting to the default Google media receiver.
-    ///
-    /// The combination the default receiver reliably plays — verified
-    /// empirically against a Chromecast Ultra (and matching what Streamyfin
-    /// ships): h264 video + stereo AAC inside an HLS stream with MPEG-TS
-    /// segments. Anything else is transcoded by Jellyfin into exactly that,
-    /// with the requested bitrate baked into the resulting TranscodingUrl.
-    /// Subtitles are burned in server-side; the default receiver has no UI
-    /// for external subtitle tracks.
-    static func buildChromecast(maxBitrate: Int? = nil) -> DeviceProfile {
-
-        var deviceProfile = DeviceProfile()
-
-        deviceProfile.directPlayProfiles = chromecastDirectPlayProfiles
-        deviceProfile.transcodingProfiles = chromecastTranscodingProfiles
-        deviceProfile.subtitleProfiles = chromecastSubtitleProfiles
-
-        if let maxBitrate {
-            deviceProfile.maxStaticBitrate = maxBitrate
-            deviceProfile.maxStreamingBitrate = maxBitrate
-            deviceProfile.musicStreamingTranscodingBitrate = maxBitrate
-        }
-
-        return deviceProfile
-    }
-
-    @ArrayBuilder<DirectPlayProfile>
-    private static var chromecastDirectPlayProfiles: [DirectPlayProfile] {
-        DirectPlayProfile(type: .video) {
-            AudioCodec.aac
-            AudioCodec.mp3
-        } videoCodecs: {
-            VideoCodec.h264
-        } containers: {
-            MediaContainer.mp4
+    /// Whether any `DirectPlayProfile` allows media with this audio codec in the given container to be played directly.
+    func canPlay(type: DlnaProfileType, audioCodec: String?, container: String?) -> Bool {
+        (directPlayProfiles ?? []).contains { profile in
+            profile.type == type
+                && profileContains(profile: profile.audioCodec, audioCodec)
+                && profileContains(profile: profile.container, container)
         }
     }
 
-    @ArrayBuilder<TranscodingProfile>
-    private static var chromecastTranscodingProfiles: [TranscodingProfile] {
-        TranscodingProfile(
-            isBreakOnNonKeyFrames: true,
-            context: .streaming,
-            maxAudioChannels: "2",
-            minSegments: 2,
-            protocol: MediaStreamProtocol.hls,
-            type: .video
-        ) {
-            AudioCodec.aac
-            AudioCodec.mp3
-        } videoCodecs: {
-            VideoCodec.h264
-        } containers: {
-            MediaContainer.ts
+    /// Whether any `DirectPlayProfile` allows media with this video codec in the given container to be played directly.
+    func canPlay(type: DlnaProfileType, videoCodec: String?, container: String?) -> Bool {
+        (directPlayProfiles ?? []).contains { profile in
+            profile.type == type
+                && profileContains(profile: profile.videoCodec, videoCodec)
+                && profileContains(profile: profile.container, container)
         }
     }
 
-    @ArrayBuilder<SubtitleProfile>
-    private static var chromecastSubtitleProfiles: [SubtitleProfile] {
-        SubtitleProfile.build(method: .encode) {
-            SubtitleFormat.ass
-            SubtitleFormat.dvbsub
-            SubtitleFormat.dvdsub
-            SubtitleFormat.pgssub
-            SubtitleFormat.ssa
-            SubtitleFormat.subrip
-            SubtitleFormat.vtt
-            SubtitleFormat.xsub
+    /// Whether any `SubtitleProfile` allows this format to be delivered via the given method.
+    func canPlay(subtitleFormat: String?, method: SubtitleDeliveryMethod) -> Bool {
+        guard let subtitleFormat = subtitleFormat?.lowercased() else { return false }
+        return (subtitleProfiles ?? []).contains { profile in
+            profile.method == method
+                && profile.format?.lowercased() == subtitleFormat
         }
+    }
+
+    /// Parse & check membership like this is CSV as that's the format we send to the server.
+    private func profileContains(profile: String?, _ candidate: String?) -> Bool {
+        guard let profile else { return true }
+        guard let candidate = candidate?.lowercased() else { return false }
+        return profile
+            .lowercased()
+            .split(separator: ",")
+            .contains { $0.trimmingCharacters(in: .whitespaces) == candidate }
     }
 }

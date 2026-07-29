@@ -192,7 +192,7 @@ applies. Upgrade to v1.3.0 or later to stop needing it.
 
 ## 🟡 Poster artwork missing in the Cast mini controller and expanded controls
 
-**Affected versions:** v1.3.0.
+**Affected versions:** v1.3.0–v1.5.0.
 
 ### Symptom
 
@@ -200,17 +200,23 @@ While casting, the mini controller (bottom bar) and the expanded
 controls screen (tap the bar) show no movie poster — title and
 playback controls work fine, the artwork area is just empty.
 
-### Why (cosmetic only)
+### What we know
 
-v1.3.0's `loadMedia` attaches only the title to the cast metadata; no
-image URLs are included yet. The default Google receiver and the iOS
-cast controls show exactly what the sender provides — no image
-provided, no image shown. Playback is completely unaffected.
+As of v1.5.0 the app **does** attach the item's primary image to the
+cast metadata (`GCKMediaMetadata.addImage`), and that image URL is a
+valid, reachable JPEG (verified by hand). Even so, the artwork still
+doesn't appear in the iOS cast controls, and we haven't pinned down
+why yet. It could be how the image is formatted or sized, how the
+metadata is passed along, or how the receiver surfaces sender-provided
+images — we genuinely don't know. Other cast apps show artwork fine,
+so it's very likely something we're still missing rather than a hard
+limitation.
 
 ### Status
 
-🐛 **Known. Cosmetic.** Fix planned for the next patch release
-(attach the item's primary image URL to `GCKMediaMetadata`).
+🐛 **Known, cause not yet understood. Cosmetic only.** Playback, the
+quality picker / bitrate, and the expanded time-slider controls all
+work normally — only the poster area is blank. No workaround needed.
 
 ---
 
