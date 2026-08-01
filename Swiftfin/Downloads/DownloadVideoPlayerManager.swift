@@ -30,7 +30,8 @@ enum DownloadVideoPlayerManager {
         guard let url = task.getMediaURL() else { return nil }
 
         let item = task.item
-        let mediaSource = item.mediaSources?.first ?? MediaSourceInfo()
+        let mediaSource = (item.mediaSources?.first ?? MediaSourceInfo())
+            .strippingRemoteSubtitleTracks()
 
         // Capture only Sendable values (the local URL) — DownloadTask itself is
         // not Sendable, so we don't reach back into it from the resolver.
@@ -38,7 +39,8 @@ enum DownloadVideoPlayerManager {
             item: item,
             mediaSource: mediaSource
         ) { baseItem, _ in
-            let source = baseItem.mediaSources?.first ?? MediaSourceInfo()
+            let source = (baseItem.mediaSources?.first ?? MediaSourceInfo())
+                .strippingRemoteSubtitleTracks()
             // MediaPlayerItem is @MainActor — hop to main to build it, exactly
             // like the online resolver awaits MediaPlayerItem.build.
             return await MediaPlayerItem(
@@ -51,5 +53,29 @@ enum DownloadVideoPlayerManager {
         }
 
         return MediaPlayerManager(provider: provider)
+    }
+}
+
+// MARK: - Offline media source sanitising
+
+private extension MediaSourceInfo {
+
+    /// Strips server-hosted sidecar subtitle tracks (those with a `deliveryURL`).
+    ///
+    /// Offline this is the crux of the all-black, unresponsive player: VLCKit is
+    /// handed these tracks as playback "children" (slaves) via
+    /// `MediaStream.asVLCPlaybackChild`, whose URL points back at the Jellyfin
+    /// server. With no network VLC hangs opening the media while trying to fetch
+    /// them, so it never reaches `.playing` (nor `.error`, so no error alert) —
+    /// just a black screen with no controls. These tracks were never downloaded,
+    /// so they're useless offline anyway. Embedded tracks inside the local media
+    /// file have no `deliveryURL` and are left intact.
+    func strippingRemoteSubtitleTracks() -> MediaSourceInfo {
+        guard let mediaStreams else { return self }
+        var copy = self
+        copy.mediaStreams = mediaStreams.filter {
+            !($0.type == .subtitle && $0.deliveryURL != nil)
+        }
+        return copy
     }
 }
