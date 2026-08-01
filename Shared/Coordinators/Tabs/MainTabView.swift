@@ -29,6 +29,7 @@ struct MainTabView: View {
             TabItem.contentGroup(provider: DefaultContentGroupProvider())
             TabItem.search
             TabItem.media
+            TabItem.downloads // [Downloads fork]
         }
         #else
         TabCoordinator {

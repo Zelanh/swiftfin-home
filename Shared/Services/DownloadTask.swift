@@ -133,6 +133,9 @@ class DownloadTask: NSObject, ObservableObject {
             )
         } catch {
             logger.error("Error downloading media for: \(item.displayTitle) with error: \(error.localizedDescription)")
+            // [Downloads fork] surface the failure instead of silently "completing"
+            // with no media file on disk (was the cause of play/delete doing nothing).
+            throw error
         }
     }
 

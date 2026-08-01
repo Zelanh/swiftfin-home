@@ -471,7 +471,7 @@ extension BaseItemDto {
     var downloadFolder: URL? {
         guard let type, let id else { return nil }
 
-        let root = URL.downloadsDirectory
+        let root = URL.swiftfinDownloads // [Downloads fork] persistent app dir (was URL.downloadsDirectory)
 //            .appendingPathComponent(userSession.user.id)
 
         switch type {

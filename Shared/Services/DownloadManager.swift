@@ -69,7 +69,8 @@ class DownloadManager: ObservableObject {
 
     func downloadedItems() -> [DownloadTask] {
         do {
-            let downloadContents = try FileManager.default.contentsOfDirectory(atPath: URL.downloadsDirectory.path)
+            // [Downloads fork] our persistent app dir (was URL.downloadsDirectory)
+            let downloadContents = try FileManager.default.contentsOfDirectory(atPath: URL.swiftfinDownloads.path)
             return downloadContents.compactMap(parseDownloadItem(with:))
         } catch {
             logger.error("Error retrieving all downloads: \(error.localizedDescription)")
@@ -80,7 +81,7 @@ class DownloadManager: ObservableObject {
 
     private func parseDownloadItem(with id: String) -> DownloadTask? {
 
-        let itemMetadataFile = URL.downloadsDirectory
+        let itemMetadataFile = URL.swiftfinDownloads // [Downloads fork] persistent app dir
             .appendingPathComponent(id)
             .appendingPathComponent("Metadata")
             .appendingPathComponent("Item.json")

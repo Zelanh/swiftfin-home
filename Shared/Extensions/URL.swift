@@ -31,6 +31,28 @@ extension URL {
 
     static let jellyfinDocsManagingUsers: URL = URL(string: "https://jellyfin.org/docs/general/server/users/adding-managing-users")!
 
+    // [Downloads fork] Our own persistent, private downloads directory, in the
+    // app's Application Support container. Replaces Apple's `URL.downloadsDirectory`,
+    // which is an unreliable location for app-managed persistent downloads on iOS
+    // (the previous cause of downloads not surviving relaunch / play / delete).
+    // Created on first use and excluded from iCloud backup (media files are large).
+    static var swiftfinDownloads: URL {
+        let directory = FileManager.default
+            .urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("Downloads", isDirectory: true)
+
+        if !FileManager.default.fileExists(atPath: directory.path) {
+            try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+
+            var mutableDirectory = directory
+            var values = URLResourceValues()
+            values.isExcludedFromBackup = true
+            try? mutableDirectory.setResourceValues(values)
+        }
+
+        return directory
+    }
+
     func isDirectoryAndReachable() throws -> Bool {
         guard try resourceValues(forKeys: [.isDirectoryKey]).isDirectory == true else {
             return false
