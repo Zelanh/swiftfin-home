@@ -84,9 +84,10 @@ extension DownloadTaskView {
                         }
                     case .complete:
                         Button(L10n.play) {
-                            if Defaults[.VideoPlayer.videoPlayerType] == .swiftfin {
-                                router.dismiss()
-//                                    router.route(to: .videoPlayer(manager: DownloadVideoPlayerManager(downloadTask: downloadTask)))
+                            // [Downloads fork] play the on-disk file offline via our manager;
+                            // the existing alert is reused as the "media file missing" path.
+                            if let manager = DownloadVideoPlayerManager.make(for: downloadTask) {
+                                router.route(to: .videoPlayer(manager: manager))
                             } else {
                                 isPresentingVideoPlayerTypeError = true
                             }

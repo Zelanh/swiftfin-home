@@ -39,6 +39,9 @@ struct SettingsView: View {
         Form(image: .jellyfinBlobBlue) {
             serverSection
             videoPlayerSection
+            #if os(iOS)
+            downloadsSection // [Downloads fork]
+            #endif
             customizeSection
             diagnosticsSection
         }
@@ -49,6 +52,22 @@ struct SettingsView: View {
         }
         #endif
     }
+
+    #if os(iOS)
+    // MARK: - Downloads Section [Downloads fork]
+    //
+    // Entry point to the offline downloads list. The `.downloadList` route and
+    // DownloadListView already exist upstream; this just makes them reachable.
+
+    @ViewBuilder
+    private var downloadsSection: some View {
+        Section {
+            ChevronButton(L10n.downloads) {
+                router.route(to: .downloadList)
+            }
+        }
+    }
+    #endif
 
     // MARK: - Server Section
 
