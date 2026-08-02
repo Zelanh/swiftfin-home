@@ -3,8 +3,11 @@
 > ⚠️ **READ THIS FIRST**
 >
 > This is a **personal fork** of [Swiftfin](https://github.com/jellyfin/Swiftfin)
-> with one feature added: **Chromecast support for iOS** (Cast button + quality
-> picker).
+> that adds two iOS features upstream doesn't ship. The first — **Chromecast
+> support** (Cast button + quality picker) — shipped in v1.5.0. The second —
+> **offline Downloads** (download movies and episodes to watch with no server,
+> a Downloads tab, a "downloaded" badge, and offline playback) — is the newer
+> **v1.6 feature, still being built and stabilised** as of this writing.
 >
 > - The fork was **written by a non-developer with heavy AI assistance** (Claude).
 > - It is **not endorsed by, affiliated with, or contributed back to the Jellyfin
