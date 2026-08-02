@@ -32,18 +32,29 @@ extension URL {
     static let jellyfinDocsManagingUsers: URL = URL(string: "https://jellyfin.org/docs/general/server/users/adding-managing-users")!
 
     // [Downloads fork] Our own persistent, private downloads directory, in the
-    // app's Application Support container. Replaces Apple's `URL.downloadsDirectory`,
-    // which is an unreliable location for app-managed persistent downloads on iOS
-    // (the previous cause of downloads not surviving relaunch / play / delete).
-    // Created on first use and excluded from iCloud backup (media files are large).
+    // app's **Documents** container so it's browsable in the Files app (the iOS
+    // target already sets `UIFileSharingEnabled` + `LSSupportsOpeningDocumentsInPlace`).
+    // Replaces Apple's `URL.downloadsDirectory` (an unreliable location for
+    // app-managed persistent downloads on iOS). Created on first use and excluded
+    // from iCloud backup (the media is large and re-downloadable). Downloads that
+    // predate this move lived under Application Support and are migrated over on
+    // first access.
     static var swiftfinDownloads: URL {
-        let directory = FileManager.default
-            .urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+        let fileManager = FileManager.default
+
+        let directory = fileManager
+            .urls(for: .documentDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("Downloads", isDirectory: true)
 
-        if !FileManager.default.fileExists(atPath: directory.path) {
-            try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let existed = fileManager.fileExists(atPath: directory.path)
 
+        Self.migrateLegacyDownloadsIfNeeded(to: directory)
+
+        if !fileManager.fileExists(atPath: directory.path) {
+            try? fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
+        }
+
+        if !existed {
             var mutableDirectory = directory
             var values = URLResourceValues()
             values.isExcludedFromBackup = true
@@ -51,6 +62,31 @@ extension URL {
         }
 
         return directory
+    }
+
+    // [Downloads fork] One-time move of downloads from the previous Application
+    // Support location to Documents. Idempotent and best-effort: once the legacy
+    // folder is gone (or was never there) this returns immediately.
+    private static func migrateLegacyDownloadsIfNeeded(to newDirectory: URL) {
+        let fileManager = FileManager.default
+
+        let legacy = fileManager
+            .urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("Downloads", isDirectory: true)
+
+        guard fileManager.fileExists(atPath: legacy.path) else { return }
+
+        try? fileManager.createDirectory(at: newDirectory, withIntermediateDirectories: true)
+
+        let contents = (try? fileManager.contentsOfDirectory(atPath: legacy.path)) ?? []
+        for name in contents {
+            let source = legacy.appendingPathComponent(name)
+            let destination = newDirectory.appendingPathComponent(name)
+            guard !fileManager.fileExists(atPath: destination.path) else { continue }
+            try? fileManager.moveItem(at: source, to: destination)
+        }
+
+        try? fileManager.removeItem(at: legacy)
     }
 
     func isDirectoryAndReachable() throws -> Bool {
