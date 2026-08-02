@@ -124,7 +124,100 @@ users. Skim these before assuming something is broken:
 
 ---
 
-## Technical changes vs. upstream
+## Fork surface — what changes on the base (per feature)
+
+This fork adds **two iOS features** on top of upstream Swiftfin:
+**Chromecast** (shipped in v1.5.0) and **offline Downloads** (newer, still
+stabilising toward a release). Both follow the same rule, which is the whole
+point of this section:
+
+> As much code as possible lives in **one owned folder per feature**, every
+> touch to a base file is **`#if os(iOS)`-guarded where relevant and tagged
+> with a `// [<Feature> fork]` comment**, and the *entire* surface is
+> greppable in one command.
+
+This is the minimal-footprint proof and the adoption guide: if you want to
+lift a feature into your own tree (or upstream it), the list below plus one
+`grep` is the complete set of edits.
+
+### Feature 1 — Chromecast (iOS)
+
+Our folder: **`Swiftfin/Chromecast/`** (7 files). Deep dive in
+[Technical changes vs. upstream (Chromecast)](#technical-changes-vs-upstream-chromecast)
+and [Architecture (Chromecast)](#architecture-chromecast) below.
+
+Base files touched (all tagged `// [Chromecast fork]`):
+
+| File | What changed |
+|---|---|
+| `Swiftfin/App/SwiftfinApp.swift` | 1 line — `ChromecastBootstrap.configure()` |
+| `Shared/Objects/…/MediaPlayerItem/MediaPlayerItem+Build.swift` | additive `customDeviceProfile:` param (used only by Cast) |
+| `Shared/Views/ItemView/…/ActionButtonHStack.swift` | mount the item-detail Cast button + warm discovery |
+| `Shared/Views/VideoPlayer/VideoPlayer.swift` | swap VLC ↔ Cast proxy while a session is active |
+| `Shared/Views/VideoPlayer/…/VideoPlayer+Toolbar.swift` | in-player Cast button placement |
+| `Cartfile` | GoogleCast Carthage binary (uncommented) |
+| `Swiftfin.xcodeproj/project.pbxproj` | link + embed `GoogleCast.xcframework` (iOS target) |
+| `.github/workflows/build-ios.yml` | new unsigned-IPA workflow (upstream `ci.yml` left intact) |
+
+Find every base hook:
+
+```
+grep -rn "\[Chromecast fork\]" Shared Swiftfin --include="*.swift"
+```
+
+### Feature 2 — Offline Downloads (iOS)
+
+Download movies/episodes to watch with no server connection, a **"downloaded"
+badge** on posters (visible even when online), a dedicated **Downloads tab**,
+and **offline playback**.
+
+> **Reused, not reinvented.** Upstream already ships an experimental but
+> *orphaned* download engine — `DownloadManager`, `DownloadTask`,
+> `DownloadListView`, `DownloadTaskView` — gated behind an unused flag, with
+> no download button, no "downloaded" indicator, and offline playback never
+> wired up. This fork **activates and fixes** that engine rather than writing
+> a new one. So a few of the base files below are that pre-existing engine
+> being wired up and corrected, not new subsystems.
+
+Our folder: **`Swiftfin/Downloads/`**:
+
+| File | Role |
+|---|---|
+| `DownloadsTab.swift` | The 4th iPhone tab (`TabItem.downloads`) |
+| `DownloadsListView.swift` | The tab's list — reloads on appear/selection, native swipe-to-delete |
+| `DownloadActionButton.swift` | Download button on the item detail (idle / progress / downloaded states) |
+| `DownloadedIndicator.swift` | The "downloaded" badge overlay drawn on posters |
+| `DownloadStatusStore.swift` | In-memory cache of downloaded IDs so poster cells don't hit disk per render |
+| `DownloadVideoPlayerManager.swift` | Offline player factory — builds a local-file `MediaPlayerItem`, and strips server-hosted subtitle "slaves" so VLC doesn't hang opening the media offline |
+
+Base files touched (all tagged `// [Downloads fork]`):
+
+| File | What changed |
+|---|---|
+| `Shared/Coordinators/Tabs/MainTabView.swift` | 1 line — add `TabItem.downloads` to the iPhone tab list |
+| `Shared/Extensions/URL.swift` | add `URL.swiftfinDownloads` — our persistent, iCloud-backup-excluded downloads dir under *Application Support* |
+| `Shared/Extensions/JellyfinAPI/BaseItemDto/BaseItemDto.swift` | point `downloadFolder` at `URL.swiftfinDownloads` |
+| `Shared/Extensions/JellyfinAPI/BaseItemDto/BaseItemDto+Poster.swift` | mount the "downloaded" badge overlay on posters |
+| `Shared/Services/DownloadManager.swift` | read downloads from our persistent dir (2 sites; was `URL.downloadsDirectory`, an unreliable location) |
+| `Shared/Services/DownloadTask.swift` | rethrow on media-save failure (was silently "completing" with no file on disk) |
+| `Shared/Views/ItemView/…/ActionButtonHStack.swift` | mount the download button (movies/episodes only) |
+| `Shared/Views/SettingsView/SettingsView.swift` | add a "Downloads" access point (iOS) |
+| `Swiftfin/Views/DownloadListView.swift` | fix the list-row thumbnail sizing (a stale `posterStyle` call had been left commented out) |
+| `Swiftfin/Views/DownloadTaskView/DownloadTaskContentView.swift` | wire the "play" action to the offline `DownloadVideoPlayerManager` |
+
+Find every base hook:
+
+```
+grep -rn "\[Downloads fork\]" Shared Swiftfin --include="*.swift"
+```
+
+> `ActionButtonHStack.swift` appears in **both** feature lists — it's the shared
+> item-detail button row. The two mounts (Cast button, Download button) are
+> independent and separately tagged.
+
+---
+
+## Technical changes vs. upstream (Chromecast)
 
 ### Dependencies added
 
@@ -219,7 +312,7 @@ from the upstream `ci.yml` (which is left untouched):
 
 ---
 
-## Architecture
+## Architecture (Chromecast)
 
 ### Cast session lifecycle
 
