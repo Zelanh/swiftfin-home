@@ -10,9 +10,10 @@ import SwiftUI
 
 extension TabItem {
 
-    /// Offline downloads tab (iOS). Reuses the existing (previously orphaned)
-    /// `DownloadListView`, which reads the downloaded items straight from disk —
-    /// so it works with no server connection, unlike the other content tabs.
+    /// Offline downloads tab (iOS). Backed by `DownloadsListView`, which reads the
+    /// downloaded items straight from disk — so it works with no server
+    /// connection, unlike the other content tabs — and, as the persistent tab
+    /// root, reloads on every appear/selection and supports swipe-to-delete.
     ///
     /// Part of the isolated Downloads integration (Swiftfin/Downloads/). The only
     /// base touch is a one-line `[Downloads fork]` hook in `MainTabView` that adds
@@ -23,7 +24,7 @@ extension TabItem {
             title: L10n.downloads,
             systemImage: "arrow.down.circle.fill"
         ) {
-            DownloadListView(viewModel: .init())
+            DownloadsListView()
         }
     }
 }
