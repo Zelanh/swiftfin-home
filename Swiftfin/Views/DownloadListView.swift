@@ -34,6 +34,10 @@ extension DownloadListView {
 
         let downloadTask: DownloadTask
 
+        // [Downloads fork] On-disk size of this download, computed once on appear.
+        @State
+        private var sizeText: String?
+
         var body: some View {
             Button {
                 router.route(to: .downloadTask(downloadTask: downloadTask))
@@ -56,19 +60,35 @@ extension DownloadListView {
                     .subtleShadow()
                     .frame(width: 110)
 
-                    VStack(alignment: .leading) {
+                    VStack(alignment: .leading, spacing: 4) {
                         Text(downloadTask.item.displayTitle)
                             .foregroundColor(.primary)
                             .fontWeight(.semibold)
                             .lineLimit(2)
                             .multilineTextAlignment(.leading)
                             .fixedSize(horizontal: false, vertical: true)
+
+                        // [Downloads fork] On-disk size of the download.
+                        if let sizeText {
+                            Text(sizeText)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
                     }
                     .padding(.vertical)
 
                     Spacer()
                 }
             }
+            .onAppear(perform: computeSize)
+        }
+
+        // [Downloads fork] Compute the on-disk size once, off the render path.
+        private func computeSize() {
+            guard sizeText == nil else { return }
+            let bytes = downloadTask.item.downloadFolder?.sizeOnDisk ?? -1
+            guard bytes > 0 else { return }
+            sizeText = Int64(bytes).formatted(.byteCount(style: .file))
         }
     }
 }
