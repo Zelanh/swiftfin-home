@@ -6,6 +6,7 @@
 // Copyright (c) 2026 Jellyfin & Jellyfin Contributors
 //
 
+import Defaults
 import FactoryKit
 import JellyfinAPI
 import SwiftUI
@@ -30,20 +31,82 @@ extension ItemView {
 
         private var item: BaseItemDto { provider.item }
 
+        // Pre-flight storage check (A1): warn before starting a download that
+        // won't fit, instead of failing silently part-way through the transfer.
+        @State
+        private var showStorageWarning = false
+        @State
+        private var storageNeeded = 0
+        @State
+        private var storageAvailable = 0
+
+        // Wi-Fi-only guard (B5): warn instead of downloading on cellular.
+        @State
+        private var showCellularWarning = false
+
         var body: some View {
-            // The manager republishes when a task is added/removed; live
-            // progress and completion come from observing the task itself.
-            if let task = downloadManager.downloads.first(where: { $0.item == item }) {
-                ActiveDownloadButton(task: task)
-            } else if downloadManager.task(for: item) != nil {
-                DownloadedButton(item: item)
-            } else {
-                Button {
-                    downloadManager.download(task: DownloadTask(item: item))
-                } label: {
-                    DownloadPill(systemImage: "arrow.down.circle")
+            Group {
+                // The manager republishes when a task is added/removed; live
+                // progress and completion come from observing the task itself.
+                //
+                // Match the active task by `id`, NOT by full `BaseItemDto` equality:
+                // toggling Favorite/Played mutates `userData`, so `provider.item`
+                // becomes `!=` the in-flight task's item. With full equality that
+                // unmatched a download mid-progress and briefly flashed the idle
+                // "download" button (looked like it would re-download). `id` is stable.
+                if let task = downloadManager.downloads.first(where: { $0.item.id == item.id }) {
+                    ActiveDownloadButton(task: task)
+                } else if downloadManager.task(for: item) != nil {
+                    DownloadedButton(item: item)
+                } else {
+                    Button {
+                        startDownload()
+                    } label: {
+                        DownloadPill(systemImage: "arrow.down.circle")
+                    }
+                    .foregroundStyle(.primary, .secondary)
                 }
-                .foregroundStyle(.primary, .secondary)
+            }
+            .alert(L10n.notEnoughStorage, isPresented: $showStorageWarning) {
+                Button(L10n.ok, role: .cancel) {}
+            } message: {
+                Text("\(Int64(storageNeeded).formatted(.byteCount(style: .file))) / \(Int64(storageAvailable).formatted(.byteCount(style: .file)))")
+            }
+            .alert(L10n.downloadOverWifiOnly, isPresented: $showCellularWarning) {
+                Button(L10n.ok, role: .cancel) {}
+            }
+        }
+
+        /// Starts the download after two guards:
+        ///
+        /// 1. Storage — if the item's reported size clearly won't fit in the
+        ///    volume's available capacity, warn instead. Unknown size (0) or
+        ///    unreadable capacity (-1) don't block.
+        /// 2. Wi-Fi only — if that setting is on and we're on cellular, warn
+        ///    instead. The connection check is async, hence the `Task`.
+        private func startDownload() {
+            let needed = item.mediaSources?.first?.size ?? 0
+            let available = FileManager.default.availableStorage
+
+            if needed > 0, available >= 0, needed > available {
+                storageNeeded = needed
+                storageAvailable = available
+                showStorageWarning = true
+                return
+            }
+
+            guard Defaults[.downloadOverWifiOnly] else {
+                downloadManager.download(task: DownloadTask(item: item))
+                return
+            }
+
+            Task { @MainActor in
+                let context = await NetworkConnectionContext.current()
+                if context.interface == .cellular {
+                    showCellularWarning = true
+                } else {
+                    downloadManager.download(task: DownloadTask(item: item))
+                }
             }
         }
     }

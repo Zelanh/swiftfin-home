@@ -56,16 +56,13 @@ struct SettingsView: View {
     #if os(iOS)
     // MARK: - Downloads Section [Downloads fork]
     //
-    // Entry point to the offline downloads list. The `.downloadList` route and
-    // DownloadListView already exist upstream; this just makes them reachable.
+    // Entry point to the offline downloads list plus downloads settings. The
+    // section body lives in our own `DownloadsSettingsSection` (Swiftfin/Downloads/)
+    // so the downloads-specific state stays out of the base SettingsView.
 
     @ViewBuilder
     private var downloadsSection: some View {
-        Section {
-            ChevronButton(L10n.downloads) {
-                router.route(to: .downloadList)
-            }
-        }
+        DownloadsSettingsSection()
     }
     #endif
 
