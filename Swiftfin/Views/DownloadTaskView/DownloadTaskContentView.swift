@@ -87,14 +87,20 @@ extension DownloadTaskView {
                             // [Downloads fork] Play the on-disk file offline through our own
                             // self-contained player; the alert is the "media file missing" path.
                             if let url = downloadTask.getMediaURL() {
-                                router.route(
-                                    to: .downloadPlayer(
-                                        url: url,
-                                        title: downloadTask.item.displayTitle,
-                                        runtimeSeconds: downloadTask.item.runtime.map { Double($0.components.seconds) } ?? 0,
-                                        itemID: downloadTask.item.id
+                                // [experiment/swiftvlc-player] SwiftVLC engine on
+                                // iOS 18+, else the VLCUI-based player.
+                                if #available(iOS 18.0, *) {
+                                    router.route(to: .ultimaFinPlayer(url: url, title: downloadTask.item.displayTitle))
+                                } else {
+                                    router.route(
+                                        to: .downloadPlayer(
+                                            url: url,
+                                            title: downloadTask.item.displayTitle,
+                                            runtimeSeconds: downloadTask.item.runtime.map { Double($0.components.seconds) } ?? 0,
+                                            itemID: downloadTask.item.id
+                                        )
                                     )
-                                )
+                                }
                             } else {
                                 isPresentingVideoPlayerTypeError = true
                             }

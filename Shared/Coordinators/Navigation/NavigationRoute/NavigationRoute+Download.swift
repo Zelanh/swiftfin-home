@@ -55,5 +55,20 @@ extension NavigationRoute {
             )
         }
     }
+
+    // [experiment/swiftvlc-player] Experimental offline player on the SwiftVLC
+    // engine (iOS 18+). Spike only — see UltimaFinPlayerView.
+    @available(iOS 18.0, *)
+    static func ultimaFinPlayer(
+        url: URL,
+        title: String
+    ) -> NavigationRoute {
+        NavigationRoute(
+            id: "ultimaFinPlayer",
+            style: .fullscreen
+        ) {
+            UltimaFinPlayerView(url: url, title: title)
+        }
+    }
     #endif
 }

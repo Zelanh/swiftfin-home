@@ -172,14 +172,20 @@ private struct DownloadedButton: View {
                 if let task = downloadManager.task(for: item),
                    let url = task.getMediaURL()
                 {
-                    router.route(
-                        to: .downloadPlayer(
-                            url: url,
-                            title: task.item.displayTitle,
-                            runtimeSeconds: task.item.runtime.map { Double($0.components.seconds) } ?? 0,
-                            itemID: task.item.id
+                    // [experiment/swiftvlc-player] Route to the SwiftVLC engine on
+                    // iOS 18+, else the VLCUI-based player.
+                    if #available(iOS 18.0, *) {
+                        router.route(to: .ultimaFinPlayer(url: url, title: task.item.displayTitle))
+                    } else {
+                        router.route(
+                            to: .downloadPlayer(
+                                url: url,
+                                title: task.item.displayTitle,
+                                runtimeSeconds: task.item.runtime.map { Double($0.components.seconds) } ?? 0,
+                                itemID: task.item.id
+                            )
                         )
-                    )
+                    }
                 }
             }
 
