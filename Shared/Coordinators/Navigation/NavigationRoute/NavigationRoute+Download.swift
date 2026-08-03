@@ -40,7 +40,8 @@ extension NavigationRoute {
     static func downloadPlayer(
         url: URL,
         title: String,
-        runtimeSeconds: Double
+        runtimeSeconds: Double,
+        itemID: String?
     ) -> NavigationRoute {
         NavigationRoute(
             id: "downloadPlayer",
@@ -49,7 +50,8 @@ extension NavigationRoute {
             UltimaPlayerView(
                 url: url,
                 title: title,
-                runtimeSeconds: runtimeSeconds
+                runtimeSeconds: runtimeSeconds,
+                itemID: itemID
             )
         }
     }

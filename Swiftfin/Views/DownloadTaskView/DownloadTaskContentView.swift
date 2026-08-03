@@ -91,7 +91,8 @@ extension DownloadTaskView {
                                     to: .downloadPlayer(
                                         url: url,
                                         title: downloadTask.item.displayTitle,
-                                        runtimeSeconds: downloadTask.item.runtime.map { Double($0.components.seconds) } ?? 0
+                                        runtimeSeconds: downloadTask.item.runtime.map { Double($0.components.seconds) } ?? 0,
+                                        itemID: downloadTask.item.id
                                     )
                                 )
                             } else {

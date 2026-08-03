@@ -176,7 +176,8 @@ private struct DownloadedButton: View {
                         to: .downloadPlayer(
                             url: url,
                             title: task.item.displayTitle,
-                            runtimeSeconds: task.item.runtime.map { Double($0.components.seconds) } ?? 0
+                            runtimeSeconds: task.item.runtime.map { Double($0.components.seconds) } ?? 0,
+                            itemID: task.item.id
                         )
                     )
                 }

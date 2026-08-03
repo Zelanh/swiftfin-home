@@ -40,9 +40,11 @@ struct UltimaPlayerView: View {
     /// Display title for the top bar.
     let title: String
     /// Total runtime in seconds (from `Item.json`), `0` if unknown — drives the
-    /// scrubber. We never seek the player to a resume point on open, so a stale
-    /// server watch-position can't strand playback at the end offline.
+    /// scrubber and bounds the local resume point.
     let runtimeSeconds: Double
+    /// Item id, used only as the **local** resume-position key (no server sync).
+    /// `nil` disables resume.
+    let itemID: String?
 
     @StateObject
     private var proxy: VLCVideoPlayer.Proxy = .init()
@@ -60,10 +62,43 @@ struct UltimaPlayerView: View {
     @State
     private var autoHideTask: Task<Void, Never>?
 
+    // [Downloads fork] Audio / subtitle tracks read straight from VLC at runtime
+    // (embedded tracks in the file), and the currently-active indexes. VLC's own
+    // track indexes are what `setAudioTrack`/`setSubtitleTrack` expect, so no
+    // mapping is needed.
+    @State
+    private var audioTracks: [Track] = []
+    @State
+    private var subtitleTracks: [Track] = []
+    @State
+    private var currentAudioIndex: Int?
+    @State
+    private var currentSubtitleIndex: Int?
+
+    struct Track: Identifiable {
+        let index: Int
+        let title: String
+        var id: Int { index }
+    }
+
     private var configuration: VLCVideoPlayer.Configuration {
         var configuration = VLCVideoPlayer.Configuration(url: url)
         configuration.autoPlay = true
+        if let resume = resumeSeconds {
+            configuration.startSeconds = .seconds(resume)
+        }
         return configuration
+    }
+
+    /// Locally-saved resume point, if any and if sensible (not near the very
+    /// start or end). `ResumeStore` reads UserDefaults, which we only write on
+    /// dismiss, so this stays constant across body re-evaluations.
+    private var resumeSeconds: Double? {
+        guard let itemID, runtimeSeconds > 0,
+              let saved = ResumeStore.seconds(for: itemID),
+              saved > 5, saved < runtimeSeconds - 15
+        else { return nil }
+        return saved
     }
 
     var body: some View {
@@ -80,10 +115,15 @@ struct UltimaPlayerView: View {
                     // touch shorter than the real file).
                     currentSeconds = runtimeSeconds > 0 ? min(seconds, runtimeSeconds) : seconds
                 }
-                .onStateUpdated { state, _ in
+                .onStateUpdated { state, info in
                     switch state {
-                    case .playing:
-                        isPlaying = true
+                    case .playing, .esAdded:
+                        if state == .playing { isPlaying = true }
+                        // Read the file's embedded tracks straight from VLC.
+                        audioTracks = info.audioTracks.map { Track(index: $0.index, title: $0.title) }
+                        subtitleTracks = info.subtitleTracks.map { Track(index: $0.index, title: $0.title) }
+                        currentAudioIndex = info.currentAudioTrack.index
+                        currentSubtitleIndex = info.currentSubtitleTrack.index
                     case .paused:
                         isPlaying = false
                     case .ended:
@@ -136,6 +176,8 @@ struct UltimaPlayerView: View {
                     .lineLimit(1)
 
                 Spacer()
+
+                trackMenus
             }
             .padding()
 
@@ -197,6 +239,55 @@ struct UltimaPlayerView: View {
         )
     }
 
+    /// Audio / subtitle pickers. Only shown when there's an actual choice: audio
+    /// when the file has more than one track; subtitles when it has at least one
+    /// real subtitle (VLC also lists a "Disable" entry to turn them off).
+    @ViewBuilder
+    private var trackMenus: some View {
+        if audioTracks.count > 1 {
+            Menu {
+                ForEach(audioTracks) { track in
+                    Button {
+                        proxy.setAudioTrack(.absolute(track.index))
+                        currentAudioIndex = track.index
+                        resetAutoHide()
+                    } label: {
+                        trackLabel(track.title, selected: currentAudioIndex == track.index)
+                    }
+                }
+            } label: {
+                Image(systemName: "waveform")
+                    .font(.title3)
+            }
+        }
+
+        if subtitleTracks.contains(where: { $0.index >= 0 }) {
+            Menu {
+                ForEach(subtitleTracks) { track in
+                    Button {
+                        proxy.setSubtitleTrack(.absolute(track.index))
+                        currentSubtitleIndex = track.index
+                        resetAutoHide()
+                    } label: {
+                        trackLabel(track.title, selected: currentSubtitleIndex == track.index)
+                    }
+                }
+            } label: {
+                Image(systemName: "captions.bubble")
+                    .font(.title3)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func trackLabel(_ title: String, selected: Bool) -> some View {
+        if selected {
+            Label(title, systemImage: "checkmark")
+        } else {
+            Text(title)
+        }
+    }
+
     // MARK: Actions
 
     private func togglePlayPause() {
@@ -253,7 +344,42 @@ struct UltimaPlayerView: View {
 
     private func deactivate() {
         autoHideTask?.cancel()
+        saveResume()
         proxy.stop()
         try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+    }
+
+    /// Persist (or clear) the local resume point for this item. Cleared when
+    /// finished or barely started so we don't resume at the very end / start.
+    private func saveResume() {
+        guard let itemID else { return }
+        if currentSeconds > 5, runtimeSeconds > 0, currentSeconds < runtimeSeconds - 15 {
+            ResumeStore.set(currentSeconds, for: itemID)
+        } else {
+            ResumeStore.set(nil, for: itemID)
+        }
+    }
+}
+
+// MARK: - Local resume store
+
+/// [Downloads fork] Local-only resume positions (seconds) keyed by item id, in
+/// `UserDefaults`. No server sync — downloads are for offline use.
+private enum ResumeStore {
+
+    private static let key = "UltimaPlayerResumeSeconds"
+
+    static func seconds(for id: String) -> Double? {
+        (UserDefaults.standard.dictionary(forKey: key) as? [String: Double])?[id]
+    }
+
+    static func set(_ seconds: Double?, for id: String) {
+        var store = (UserDefaults.standard.dictionary(forKey: key) as? [String: Double]) ?? [:]
+        if let seconds {
+            store[id] = seconds
+        } else {
+            store.removeValue(forKey: id)
+        }
+        UserDefaults.standard.set(store, forKey: key)
     }
 }
