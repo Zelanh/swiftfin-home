@@ -105,9 +105,12 @@ jobs:
           # invokes xcodebuild with whatever default flags make the SPM build graph
           # correctly produce CasePaths.swiftmodule for iOS (which our direct
           # xcodebuild invocations were failing to do).
+          # [experiment/swiftvlc-player] 26.6 (Swift 6.3) for SwiftVLC. Fastlane's
+          # xcodes step re-selects Xcode from THIS value, so it must match the
+          # Xcode-setup step above or it silently overrides it back to 26.3.
           bundle exec fastlane buildLane \
             scheme:"\"Swiftfin\"" \
-            xcodeVersion:26.3
+            xcodeVersion:26.6
 
       - name: Package as IPA
         run: |
