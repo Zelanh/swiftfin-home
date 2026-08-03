@@ -174,39 +174,50 @@ Download movies/episodes to watch with no server connection, a **"downloaded"
 badge** on posters (visible even when online), a dedicated **Downloads tab**,
 and **offline playback**.
 
-> **Reused, not reinvented.** Upstream already ships an experimental but
-> *orphaned* download engine — `DownloadManager`, `DownloadTask`,
-> `DownloadListView`, `DownloadTaskView` — gated behind an unused flag, with
-> no download button, no "downloaded" indicator, and offline playback never
-> wired up. This fork **activates and fixes** that engine rather than writing
-> a new one. So a few of the base files below are that pre-existing engine
-> being wired up and corrected, not new subsystems.
+> **Reused where sensible, isolated where necessary.** Upstream already ships an
+> experimental but *orphaned* download **engine** — `DownloadManager`,
+> `DownloadTask`, `DownloadListView`, `DownloadTaskView` — gated behind an unused
+> flag, with no download button, no "downloaded" indicator, and offline playback
+> never wired up. This fork **activates and fixes** that engine rather than
+> writing a new one, so a few of the base files below are that pre-existing
+> engine being corrected, not new subsystems. Offline **playback**, by contrast,
+> runs through the fork's **own** player (`UltimaPlayer/`) instead of the base
+> `MediaPlayerManager`: that base pipeline leaks a player instance per playback
+> (only one item plays per app launch, force-quit needed for the next), and
+> playback depends 100% on it, so isolating downloaded playback both fixes the
+> leak and shields the feature from future upstream player rewrites.
 
 Our folder: **`Swiftfin/Downloads/`**:
 
 | File | Role |
 |---|---|
 | `DownloadsTab.swift` | The 4th iPhone tab (`TabItem.downloads`) |
-| `DownloadsListView.swift` | The tab's list — reloads on appear/selection, native swipe-to-delete |
-| `DownloadActionButton.swift` | Download button on the item detail (idle / progress / downloaded states) |
+| `DownloadsListView.swift` | The tab's list — live-reloads on appear/selection, an "in progress" section with live progress bars, a total-size header, native swipe-to-delete |
+| `DownloadActionButton.swift` | Download button on the item detail (idle / progress / downloaded states), with a storage-capacity pre-check and a Wi-Fi-only guard |
 | `DownloadedIndicator.swift` | The "downloaded" badge overlay drawn on posters |
 | `DownloadStatusStore.swift` | In-memory cache of downloaded IDs so poster cells don't hit disk per render |
-| `DownloadVideoPlayerManager.swift` | Offline player factory — builds a local-file `MediaPlayerItem`, and strips server-hosted subtitle "slaves" so VLC doesn't hang opening the media offline |
+| `DownloadsSettingsSection.swift` | The Downloads section in Settings (incl. the "Download over Wi-Fi only" toggle) |
+| `UltimaPlayer/UltimaPlayerView.swift` | **Self-contained offline player** — drives VLCUI's `VLCVideoPlayer` directly (no base `MediaPlayerManager`), with audio & subtitle track pickers read straight from the file and a local (no-server-sync) resume position. Isolated from the base player, so an upstream player rewrite can't break it, and free of the base pipeline's per-launch playback leak |
 
-Base files touched (all tagged `// [Downloads fork]`):
+Base files touched — the Swift hooks are all tagged `// [Downloads fork]`; the
+localized-strings files are the untagged exception (SwiftGen regenerates
+`Strings.swift` from them):
 
 | File | What changed |
 |---|---|
 | `Shared/Coordinators/Tabs/MainTabView.swift` | 1 line — add `TabItem.downloads` to the iPhone tab list |
-| `Shared/Extensions/URL.swift` | add `URL.swiftfinDownloads` — our persistent, iCloud-backup-excluded downloads dir under *Application Support* |
-| `Shared/Extensions/JellyfinAPI/BaseItemDto/BaseItemDto.swift` | point `downloadFolder` at `URL.swiftfinDownloads` |
+| `Shared/Coordinators/Navigation/NavigationRoute/NavigationRoute+Download.swift` | the `downloadTask` detail route + the `downloadPlayer` route that presents our `UltimaPlayerView` |
+| `Shared/Extensions/URL.swift` | two download roots — `swiftfinDownloads` (media, in **Documents** so each file is visible/deletable in Files & iPhone Storage) and `swiftfinDownloadsMetadata` (the "tripas": `Item.json` + artwork, in **Application Support**, hidden); both excluded from iCloud backup |
+| `Shared/Extensions/JellyfinAPI/BaseItemDto/BaseItemDto.swift` | `downloadFolder` (metadata root), `downloadMediaFolder` (media root) and `downloadMediaBaseName` (filesystem-safe `<Title>` for the media file) |
 | `Shared/Extensions/JellyfinAPI/BaseItemDto/BaseItemDto+Poster.swift` | mount the "downloaded" badge overlay on posters |
-| `Shared/Services/DownloadManager.swift` | read downloads from our persistent dir (2 sites; was `URL.downloadsDirectory`, an unreliable location) |
-| `Shared/Services/DownloadTask.swift` | rethrow on media-save failure (was silently "completing" with no file on disk) |
+| `Shared/Services/DownloadManager.swift` | scan the metadata root, reconcile against the media on disk (drop + clean up a download whose file the user deleted), one-time migration to the split layout, and `reset()` |
+| `Shared/Services/DownloadTask.swift` | save the media as `<Title>.<ext>` in Documents and the tripas in App Support; `getMediaURL`; delete both halves; rethrow on media-save failure (was silently "completing" with no file on disk) |
+| `Shared/Services/SwiftfinDefaults.swift` | the `downloadOverWifiOnly` setting key |
 | `Shared/Views/ItemView/…/ActionButtonHStack.swift` | mount the download button (movies/episodes only) |
-| `Shared/Views/SettingsView/SettingsView.swift` | add a "Downloads" access point (iOS) |
-| `Swiftfin/Views/DownloadListView.swift` | fix the list-row thumbnail sizing (a stale `posterStyle` call had been left commented out) |
-| `Swiftfin/Views/DownloadTaskView/DownloadTaskContentView.swift` | wire the "play" action to the offline `DownloadVideoPlayerManager` |
+| `Shared/Views/SettingsView/SettingsView.swift` | mount the Downloads settings section (iOS) |
+| `Shared/Strings/Strings.swift` + `Translations/{en,es,ca}.lproj/Localizable.strings` | new localized strings (`notEnoughStorage`, `downloadOverWifiOnly`, `downloadsTotalSize`) |
+| `Swiftfin/Views/DownloadListView.swift` | fixed-size list-row thumbnails + a per-row on-disk size |
+| `Swiftfin/Views/DownloadTaskView/DownloadTaskContentView.swift` | route the "play" action to the offline `UltimaPlayerView` |
 
 Find every base hook:
 
