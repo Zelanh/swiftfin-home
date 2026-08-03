@@ -8,11 +8,14 @@ on:
       - main
       - "feature/**"
       - "chore/**"
+      - "experiment/**"
 
 jobs:
   build:
     name: Build IPA
-    runs-on: macos-15
+    # [experiment/swiftvlc-player] macos-26 for Xcode 26.6 (Swift 6.3), which
+    # SwiftVLC requires. Upstream Swiftfin's own ci.yml builds on this combo.
+    runs-on: macos-26
 
     steps:
       - name: Checkout repository
@@ -20,12 +23,17 @@ jobs:
 
       - name: Xcode setup
         run: |
-          # Match upstream Swiftfin's ci.yml — they use Xcode 26.3 successfully.
-          if [ -d "/Applications/Xcode_26.3.app" ]; then
-            sudo xcode-select -s /Applications/Xcode_26.3.app/Contents/Developer
-            echo "Switched to Xcode 26.3"
-          elif [ -d "/Applications/Xcode_26.0.app" ]; then
-            sudo xcode-select -s /Applications/Xcode_26.0.app/Contents/Developer
+          # [experiment/swiftvlc-player] SwiftVLC needs Xcode 26.4+/Swift 6.3;
+          # upstream Swiftfin's ci.yml uses 26.6. Prefer it, fall back downward.
+          if [ -d "/Applications/Xcode_26.6.app" ]; then
+            sudo xcode-select -s /Applications/Xcode_26.6.app/Contents/Developer
+            echo "Switched to Xcode 26.6"
+          elif [ -d "/Applications/Xcode_26.5.app" ]; then
+            sudo xcode-select -s /Applications/Xcode_26.5.app/Contents/Developer
+            echo "Switched to Xcode 26.5"
+          elif [ -d "/Applications/Xcode_26.4.1.app" ]; then
+            sudo xcode-select -s /Applications/Xcode_26.4.1.app/Contents/Developer
+            echo "Switched to Xcode 26.4.1"
           fi
           sudo xcodebuild -license accept
           sudo xcodebuild -runFirstLaunch || true
