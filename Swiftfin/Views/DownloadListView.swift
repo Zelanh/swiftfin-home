@@ -42,10 +42,11 @@ extension DownloadListView {
             Button {
                 router.route(to: .downloadTask(downloadTask: downloadTask))
             } label: {
-                HStack(alignment: .bottom, spacing: 12) {
-                    // [Downloads fork] Small, aspect-correct landscape thumbnail.
-                    // Upstream's sizing modifier was commented out (it used a
-                    // stale `posterStyle` API), so the image filled the whole row.
+                HStack(alignment: .center, spacing: 14) {
+                    // [Downloads fork] Small landscape thumbnail at a FIXED size so
+                    // every row's image is identical (some artwork is 16:9, some
+                    // 4:3 or portrait — a width-only frame let them differ in
+                    // height). Fill + clip to 110×62 crops each to the same box.
                     // Try "Backdrop" first: episodes only save that still, movies
                     // save both — so every row shows an intelligible image.
                     ImageView([
@@ -56,9 +57,11 @@ extension DownloadListView {
                         Color.secondary
                             .opacity(0.8)
                     }
-                    .posterStyle(.landscape)
+                    .aspectRatio(1.77, contentMode: .fill)
+                    .frame(width: 110, height: 62)
+                    .clipped()
+                    .cornerRadius(6)
                     .subtleShadow()
-                    .frame(width: 110)
 
                     VStack(alignment: .leading, spacing: 4) {
                         Text(downloadTask.item.displayTitle)

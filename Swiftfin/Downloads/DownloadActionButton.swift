@@ -170,9 +170,15 @@ private struct DownloadedButton: View {
         Menu {
             Button(L10n.play) {
                 if let task = downloadManager.task(for: item),
-                   let manager = DownloadVideoPlayerManager.make(for: task)
+                   let url = task.getMediaURL()
                 {
-                    router.route(to: .videoPlayer(manager: manager))
+                    router.route(
+                        to: .downloadPlayer(
+                            url: url,
+                            title: task.item.displayTitle,
+                            runtimeSeconds: task.item.runtime.map { Double($0.components.seconds) } ?? 0
+                        )
+                    )
                 }
             }
 

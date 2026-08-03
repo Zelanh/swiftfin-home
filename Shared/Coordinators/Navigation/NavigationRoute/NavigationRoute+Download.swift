@@ -33,5 +33,25 @@ extension NavigationRoute {
             DownloadTaskView(downloadTask: downloadTask)
         }
     }
+
+    // [Downloads fork] Offline playback goes through our own self-contained player
+    // (Swiftfin/Downloads/UltimaPlayer/), not the base `MediaPlayerManager` route,
+    // so it's isolated from the base player and free of its per-launch leak.
+    static func downloadPlayer(
+        url: URL,
+        title: String,
+        runtimeSeconds: Double
+    ) -> NavigationRoute {
+        NavigationRoute(
+            id: "downloadPlayer",
+            style: .fullscreen
+        ) {
+            UltimaPlayerView(
+                url: url,
+                title: title,
+                runtimeSeconds: runtimeSeconds
+            )
+        }
+    }
     #endif
 }
