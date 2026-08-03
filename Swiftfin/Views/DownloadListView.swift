@@ -42,7 +42,7 @@ extension DownloadListView {
             Button {
                 router.route(to: .downloadTask(downloadTask: downloadTask))
             } label: {
-                HStack(alignment: .bottom) {
+                HStack(alignment: .bottom, spacing: 12) {
                     // [Downloads fork] Small, aspect-correct landscape thumbnail.
                     // Upstream's sizing modifier was commented out (it used a
                     // stale `posterStyle` API), so the image filled the whole row.
@@ -86,7 +86,8 @@ extension DownloadListView {
         // [Downloads fork] Compute the on-disk size once, off the render path.
         private func computeSize() {
             guard sizeText == nil else { return }
-            let bytes = downloadTask.item.downloadFolder?.sizeOnDisk ?? -1
+            // [Downloads fork] Size of the media file (the metadata folder is tiny now).
+            let bytes = downloadTask.item.downloadMediaFolder?.sizeOnDisk ?? -1
             guard bytes > 0 else { return }
             sizeText = Int64(bytes).formatted(.byteCount(style: .file))
         }

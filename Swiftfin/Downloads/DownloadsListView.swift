@@ -7,6 +7,7 @@
 //
 
 import FactoryKit
+import JellyfinAPI
 import SwiftUI
 
 /// The Downloads tab's list (iOS).
@@ -83,7 +84,9 @@ struct DownloadsListView: View {
                         }
                     } header: {
                         if totalBytes > 0 {
-                            Text("\(L10n.size): \(Int64(totalBytes).formatted(.byteCount(style: .file)))")
+                            // [Downloads fork] "Total size" (not just "Size:") so it
+                            // reads as the whole-section total, not one item's size.
+                            Text("\(L10n.downloadsTotalSize): \(Int64(totalBytes).formatted(.byteCount(style: .file)))")
                         }
                     }
                 }
@@ -158,9 +161,13 @@ private struct ActiveDownloadRow: View {
 
     var body: some View {
         HStack(spacing: 12) {
+            // [Downloads fork] Mid-download the artwork isn't saved to disk yet, so
+            // pull the poster straight from the server (we're online while it runs).
+            // Backdrop first, episode still (Primary) as fallback — same order the
+            // finished row uses once the images are on disk.
             ImageView([
-                task.getImageURL(name: "Backdrop"),
-                task.getImageURL(name: "Primary"),
+                task.item.imageSource(.backdrop, environment: ImageSourceOptions(maxWidth: 300)),
+                task.item.imageSource(.primary, environment: ImageSourceOptions(maxWidth: 300)),
             ])
             .failure {
                 Color.secondary.opacity(0.8)

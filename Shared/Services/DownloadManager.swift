@@ -44,15 +44,22 @@ class DownloadManager: ObservableObject {
     }
 
     func task(for item: BaseItemDto) -> DownloadTask? {
-        if let currentlyDownloading = downloads.first(where: { $0.item == item }) {
+        // [Downloads fork] Match in-flight downloads by id (userData like Favorite
+        // mutates the item, which would otherwise unmatch a full-equality check).
+        if let currentlyDownloading = downloads.first(where: { $0.item.id == item.id }) {
             return currentlyDownloading
-        } else {
-            var isDir: ObjCBool = true
-            guard let downloadFolder = item.downloadFolder else { return nil }
-            guard FileManager.default.fileExists(atPath: downloadFolder.path, isDirectory: &isDir) else { return nil }
-
-            return parseDownloadItem(with: item.id!)
         }
+
+        // [Downloads fork] On disk, "downloaded" means the media file is actually
+        // present — not just the metadata (the user can delete media from Files).
+        guard let id = item.id, let task = parseDownloadItem(with: id) else { return nil }
+
+        guard task.getMediaURL() != nil else {
+            task.deleteRootFolder() // stale metadata with no media → clean up
+            return nil
+        }
+
+        return task
     }
 
     func cancel(task: DownloadTask) {
@@ -67,33 +74,116 @@ class DownloadManager: ObservableObject {
         downloads.removeAll(where: { $0.item == task.item })
     }
 
-    func downloadedItems() -> [DownloadTask] {
-        do {
-            // [Downloads fork] our persistent app dir (was URL.downloadsDirectory)
-            let downloadContents = try FileManager.default.contentsOfDirectory(atPath: URL.swiftfinDownloads.path)
-            return downloadContents.compactMap(parseDownloadItem(with:))
-        } catch {
-            logger.error("Error retrieving all downloads: \(error.localizedDescription)")
+    // [Downloads fork] Called from `DownloadTask`'s error paths (download failure /
+    // invalidated session) to recover the manager: drop any task that ended in
+    // error or was cancelled — otherwise the `guard !downloads.contains` in
+    // `download(task:)` would block re-downloading the same item — and clear the
+    // temp directory of the partial file.
+    func reset() {
+        downloads.removeAll { task in
+            switch task.state {
+            case .error, .cancelled:
+                return true
+            default:
+                return false
+            }
+        }
 
+        clearTmp()
+    }
+
+    func downloadedItems() -> [DownloadTask] {
+        migrateToSplitStorageIfNeeded()
+
+        // [Downloads fork] Downloads are identified by their metadata folders in the
+        // private root. The media in Documents can be deleted by the user (Files /
+        // iPhone Storage), so reconcile: drop — and clean up the stale metadata of —
+        // any download whose media file is gone.
+        guard let ids = try? FileManager.default.contentsOfDirectory(atPath: URL.swiftfinDownloadsMetadata.path) else {
             return []
+        }
+
+        return ids.compactMap { id in
+            guard let task = parseDownloadItem(with: id) else { return nil }
+            guard task.getMediaURL() != nil else {
+                task.deleteRootFolder()
+                return nil
+            }
+            return task
         }
     }
 
     private func parseDownloadItem(with id: String) -> DownloadTask? {
-
-        let itemMetadataFile = URL.swiftfinDownloads // [Downloads fork] persistent app dir
+        // [Downloads fork] Metadata lives in the private Application Support root.
+        let itemMetadataFile = URL.swiftfinDownloadsMetadata
             .appendingPathComponent(id)
             .appendingPathComponent("Metadata")
             .appendingPathComponent("Item.json")
 
         guard let itemMetadataData = FileManager.default.contents(atPath: itemMetadataFile.path) else { return nil }
 
-        let jsonDecoder = JSONDecoder()
-
-        guard let offlineItem = try? jsonDecoder.decode(BaseItemDto.self, from: itemMetadataData) else { return nil }
+        guard let offlineItem = try? JSONDecoder().decode(BaseItemDto.self, from: itemMetadataData) else { return nil }
 
         let task = DownloadTask(item: offlineItem)
         task.state = .complete
         return task
+    }
+
+    // [Downloads fork] One-time migration from the old single-folder layout
+    // (Documents/Downloads/<id>/{Media.<ext>, Images/, Metadata/}) to the split
+    // layout: the media stays in Documents renamed to "<Title>.<ext>", and the
+    // tripas (Item.json + artwork) move to the private Application Support root.
+    // Idempotent — a folder without a "Metadata" subfolder is already migrated —
+    // and best-effort. A folder with no decodable Item.json is left untouched.
+    private func migrateToSplitStorageIfNeeded() {
+        let fileManager = FileManager.default
+        let mediaRoot = URL.swiftfinDownloads
+        let metadataRoot = URL.swiftfinDownloadsMetadata
+
+        guard let entries = try? fileManager.contentsOfDirectory(atPath: mediaRoot.path) else { return }
+
+        for id in entries {
+            let itemFolder = mediaRoot.appendingPathComponent(id)
+
+            var isDirectory: ObjCBool = false
+            guard fileManager.fileExists(atPath: itemFolder.path, isDirectory: &isDirectory), isDirectory.boolValue
+            else { continue }
+
+            let oldMetadataFolder = itemFolder.appendingPathComponent("Metadata")
+            guard fileManager.fileExists(atPath: oldMetadataFolder.path) else { continue }
+
+            guard let data = fileManager.contents(atPath: oldMetadataFolder.appendingPathComponent("Item.json").path),
+                  let item = try? JSONDecoder().decode(BaseItemDto.self, from: data)
+            else { continue }
+
+            // 1. Rename the media file in place to "<Title>.<ext>". The media file
+            // is the only entry that isn't one of the known subfolders (note that
+            // "Metadata" also starts with "Media", so a prefix match is unsafe).
+            if let contents = try? fileManager.contentsOfDirectory(atPath: itemFolder.path),
+               let mediaName = contents.first(where: { $0 != "Metadata" && $0 != "Images" && !$0.hasPrefix(".") })
+            {
+                let fileExtension = (mediaName as NSString).pathExtension
+                let newName = fileExtension.isEmpty
+                    ? item.downloadMediaBaseName
+                    : "\(item.downloadMediaBaseName).\(fileExtension)"
+                let destination = itemFolder.appendingPathComponent(newName)
+
+                if newName != mediaName, !fileManager.fileExists(atPath: destination.path) {
+                    try? fileManager.moveItem(at: itemFolder.appendingPathComponent(mediaName), to: destination)
+                }
+            }
+
+            // 2. Move the tripas to the private metadata root.
+            let newMetadataFolder = metadataRoot.appendingPathComponent(id)
+            try? fileManager.createDirectory(at: newMetadataFolder, withIntermediateDirectories: true)
+
+            for subfolder in ["Metadata", "Images"] {
+                let source = itemFolder.appendingPathComponent(subfolder)
+                let destination = newMetadataFolder.appendingPathComponent(subfolder)
+                guard fileManager.fileExists(atPath: source.path), !fileManager.fileExists(atPath: destination.path)
+                else { continue }
+                try? fileManager.moveItem(at: source, to: destination)
+            }
+        }
     }
 }

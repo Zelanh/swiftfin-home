@@ -31,62 +31,45 @@ extension URL {
 
     static let jellyfinDocsManagingUsers: URL = URL(string: "https://jellyfin.org/docs/general/server/users/adding-managing-users")!
 
-    // [Downloads fork] Our own persistent, private downloads directory, in the
-    // app's **Documents** container so it's browsable in the Files app (the iOS
-    // target already sets `UIFileSharingEnabled` + `LSSupportsOpeningDocumentsInPlace`).
-    // Replaces Apple's `URL.downloadsDirectory` (an unreliable location for
-    // app-managed persistent downloads on iOS). Created on first use and excluded
-    // from iCloud backup (the media is large and re-downloadable). Downloads that
-    // predate this move lived under Application Support and are migrated over on
-    // first access.
+    // [Downloads fork] **Media** root — the actual video files, in the app's
+    // Documents container so each download is browsable/deletable in the Files app
+    // and iPhone Storage. Layout is `<id>/<Title>.<ext>`: iOS flattens folders in
+    // its file list, so the user sees one nicely-named file per download and never
+    // the internals. Excluded from iCloud backup (large, re-downloadable).
     static var swiftfinDownloads: URL {
-        let fileManager = FileManager.default
-
-        let directory = fileManager
-            .urls(for: .documentDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent("Downloads", isDirectory: true)
-
-        let existed = fileManager.fileExists(atPath: directory.path)
-
-        Self.migrateLegacyDownloadsIfNeeded(to: directory)
-
-        if !fileManager.fileExists(atPath: directory.path) {
-            try? fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
-        }
-
-        if !existed {
-            var mutableDirectory = directory
-            var values = URLResourceValues()
-            values.isExcludedFromBackup = true
-            try? mutableDirectory.setResourceValues(values)
-        }
-
-        return directory
+        ensureDownloadsDirectory(
+            FileManager.default
+                .urls(for: .documentDirectory, in: .userDomainMask)[0]
+                .appendingPathComponent("Downloads", isDirectory: true)
+        )
     }
 
-    // [Downloads fork] One-time move of downloads from the previous Application
-    // Support location to Documents. Idempotent and best-effort: once the legacy
-    // folder is gone (or was never there) this returns immediately.
-    private static func migrateLegacyDownloadsIfNeeded(to newDirectory: URL) {
+    // [Downloads fork] **Metadata** root — the "tripas" (Item.json + artwork) per
+    // download, in the app's *private* Application Support container so they're
+    // never shown in Files / Settings. Keeping metadata here (not next to the
+    // media) is what stops a user from deleting Item.json and orphaning a
+    // multi-GB media file.
+    static var swiftfinDownloadsMetadata: URL {
+        ensureDownloadsDirectory(
+            FileManager.default
+                .urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+                .appendingPathComponent("Downloads", isDirectory: true)
+        )
+    }
+
+    // [Downloads fork] Create the directory on first use and exclude it from iCloud backup.
+    private static func ensureDownloadsDirectory(_ directory: URL) -> URL {
         let fileManager = FileManager.default
+        guard !fileManager.fileExists(atPath: directory.path) else { return directory }
 
-        let legacy = fileManager
-            .urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent("Downloads", isDirectory: true)
+        try? fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
 
-        guard fileManager.fileExists(atPath: legacy.path) else { return }
+        var mutable = directory
+        var values = URLResourceValues()
+        values.isExcludedFromBackup = true
+        try? mutable.setResourceValues(values)
 
-        try? fileManager.createDirectory(at: newDirectory, withIntermediateDirectories: true)
-
-        let contents = (try? fileManager.contentsOfDirectory(atPath: legacy.path)) ?? []
-        for name in contents {
-            let source = legacy.appendingPathComponent(name)
-            let destination = newDirectory.appendingPathComponent(name)
-            guard !fileManager.fileExists(atPath: destination.path) else { continue }
-            try? fileManager.moveItem(at: source, to: destination)
-        }
-
-        try? fileManager.removeItem(at: legacy)
+        return directory
     }
 
     func isDirectoryAndReachable() throws -> Bool {

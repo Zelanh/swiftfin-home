@@ -468,29 +468,40 @@ extension BaseItemDto {
 
     // TODO: series-season-episode hierarchy for episodes
     // TODO: user hierarchy for downloads
+    // [Downloads fork] Private per-download folder for the "tripas" — Item.json +
+    // artwork — in Application Support (never shown in Files / Settings). Was the
+    // single folder for everything; media now lives in `downloadMediaFolder`.
     var downloadFolder: URL? {
-        guard let type, let id else { return nil }
+        downloadSubfolder(in: URL.swiftfinDownloadsMetadata)
+    }
 
-        let root = URL.swiftfinDownloads // [Downloads fork] persistent app dir (was URL.downloadsDirectory)
-//            .appendingPathComponent(userSession.user.id)
+    // [Downloads fork] Per-download folder for the media file itself, in Documents
+    // so it's browsable/deletable in the Files app. Holds one `<Title>.<ext>` file.
+    var downloadMediaFolder: URL? {
+        downloadSubfolder(in: URL.swiftfinDownloads)
+    }
+
+    private func downloadSubfolder(in root: URL) -> URL? {
+        guard let type, let id else { return nil }
 
         switch type {
         case .movie, .episode:
-            return root
-                .appendingPathComponent(id)
-//        case .episode:
-//            guard let seasonID = seasonID,
-//                  let seriesID = seriesID
-//            else {
-//                return nil
-//            }
-//            return root
-//                .appendingPathComponent(seriesID)
-//                .appendingPathComponent(seasonID)
-//                .appendingPathComponent(id)
+            return root.appendingPathComponent(id)
         default:
             return nil
         }
+    }
+
+    // [Downloads fork] Filesystem-safe base name for the downloaded media file,
+    // from the display title (e.g. "X-Men II"), so downloads are recognizable in
+    // the Files app. Illegal path characters are replaced.
+    var downloadMediaBaseName: String {
+        let illegalCharacters = CharacterSet(charactersIn: "/\\:?%*|\"<>")
+        let cleaned = displayTitle
+            .components(separatedBy: illegalCharacters)
+            .joined(separator: "-")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return cleaned.isEmpty ? "Download" : cleaned
     }
 
     /// Returns `originalTitle` if it is not the same as `displayTitle`
