@@ -214,25 +214,27 @@ struct UltimaFinPlayerView: View {
         // the main actor: "one-time plugin and decoder setup that can be
         // expensive on iOS ... instead of blocking the main actor".
         log("▶︎ stage 2 — VLCInstance on a DETACHED task (off the main actor)")
-        let creation = Task.detached(priority: .userInitiated) { () -> Result<VLCInstance, VLCError> in
+        // Tuple instead of Result: VLCInstance.init uses typed throws
+        // (`throws(VLCError)`), but this target compiles as Swift 5, where an
+        // untyped `catch` still binds `any Error`. Carrying the message as a
+        // String sidesteps that mismatch entirely.
+        let creation = Task.detached(priority: .userInitiated) { () -> (instance: VLCInstance?, message: String?) in
             do {
                 let instance = try VLCInstance(
                     arguments: VLCInstance.defaultArguments + ["--verbose=2"],
                     applicationName: "Swiftfin UltimaFin",
                     httpUserAgent: "Swiftfin"
                 )
-                return .success(instance)
+                return (instance, nil)
             } catch {
-                return .failure(error)
+                return (nil, String(describing: error))
             }
         }
 
-        let instance: VLCInstance
-        switch await creation.value {
-        case let .success(created):
-            instance = created
-        case let .failure(error):
-            let message = String(describing: error)
+        let outcome = await creation.value
+
+        guard let instance = outcome.instance else {
+            let message = outcome.message ?? "unknown"
             liveness.stop()
             log("❌ VLCInstance failed: \(message)")
             log("   → libVLC returned nil; it could not initialize in this process.")
