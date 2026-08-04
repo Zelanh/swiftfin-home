@@ -6,38 +6,49 @@
 // Copyright (c) 2026 Jellyfin & Jellyfin Contributors
 //
 
-// This is a throwaway diagnostic view on a throwaway branch; its strings are
-// deliberately raw English so they read the same on screen and in the log file.
+// Throwaway diagnostic view on a throwaway branch; strings are deliberately
+// raw English so they read the same on screen and in the log file.
 // swiftlint:disable hard_coded_display_string
 
 import AVFoundation
+import Foundation
 import SwiftUI
 import SwiftVLC
 
 /// [experiment/swiftvlc-player] Diagnostic offline player on **SwiftVLC**.
 ///
-/// The previous revision crashed instantly on tapping Play, and `try?` did
-/// nothing because the crash sites in this path are **not** catchable:
+/// ## What the previous run told us
 ///
-/// - `VLCInstance.shared` → `private convenience init()` → `try! self.init(…)`
-///   (VLCInstance.swift:265) — fatal if `libvlc_new` returns nil.
-/// - `Player.init` → `makeNativePlayer` → `preconditionFailure(…)`
-///   (Player.swift:599) — fatal if `libvlc_media_player_new` returns nil.
+/// The log stopped dead on `stage 2 — VLCInstance(arguments:)` with **no**
+/// `❌ VLCInstance failed` line. That matters: a `nil` from `libvlc_new` would
+/// have thrown `.instanceCreationFailed` and logged cleanly. So the process
+/// died *inside* `libvlc_new()` — it did not fail, it never returned.
 ///
-/// Worse, `@State private var player = Player()` ran at *struct init*, i.e.
-/// before the view ever appeared — so we were very likely dying while
-/// initializing libVLC, not while playing.
+/// ## The hypothesis this build tests
 ///
-/// This version therefore:
-///  1. never touches `VLCInstance.shared` (uses the throwing `init` instead,
-///     so `.instanceCreationFailed` becomes a message rather than a crash),
-///  2. builds everything lazily in stages, logging **before** each one,
-///  3. pumps libVLC's own log (`--verbose=2`) to screen, and
-///  4. mirrors every line to `Documents/UltimaFin-diagnostics.log` with
-///     unbuffered writes, so the trail survives a hard crash and can be read
-///     from the Files app.
+/// SwiftVLC's own docs (VLCInstance.swift:23-28) warn that the first instance
+/// does "one-time plugin and decoder setup that can be **expensive on iOS**"
+/// and offer `prewarmShared()` precisely to avoid "**blocking the main actor**".
+/// Both previous revisions did exactly that: built libVLC synchronously on the
+/// main actor. A long enough main-thread stall is killed by the OS, and that
+/// looks *identical* in our log to a segfault.
 ///
-/// The last `▶︎ stage` line in that file is where it died.
+/// So this build separates the two, by measurement rather than argument:
+///
+/// - libVLC is created on a **detached background task**, as documented.
+/// - A **heartbeat** on an independent GCD thread writes `alive Ns` to the file.
+/// - A **main-actor ticker** increments a counter every 100 ms; the heartbeat
+///   prints it. If the main thread is stalled the counter freezes while the
+///   heartbeat keeps going.
+///
+/// Reading the resulting file:
+///
+/// | Log ends with | Verdict |
+/// |---|---|
+/// | heartbeats running, `ticks=` frozen, then silence | main-thread stall → OS kill |
+/// | heartbeats running, `ticks=` advancing, then silence | genuine crash inside libVLC |
+/// | no heartbeats at all after stage 2 | instant crash, whole process gone |
+/// | `✅ libVLC 4.x` and it plays | it was only the main-actor block all along |
 @available(iOS 18.0, *)
 struct UltimaFinPlayerView: View {
 
@@ -55,6 +66,8 @@ struct UltimaFinPlayerView: View {
     private var failure: String?
     @State
     private var logTask: Task<Void, Never>?
+    @State
+    private var tickTask: Task<Void, Never>?
     @State
     private var didBoot = false
 
@@ -106,7 +119,6 @@ struct UltimaFinPlayerView: View {
                         .fixedSize(horizontal: false, vertical: true)
                 }
 
-                // Rolling libVLC / stage log. Newest at the bottom.
                 ScrollViewReader { proxy in
                     ScrollView {
                         VStack(alignment: .leading, spacing: 1) {
@@ -142,6 +154,7 @@ struct UltimaFinPlayerView: View {
         }
         .onDisappear {
             logTask?.cancel()
+            tickTask?.cancel()
             player?.stop()
             try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
         }
@@ -183,25 +196,54 @@ struct UltimaFinPlayerView: View {
             log("   ⚠️ \(String(describing: error))")
         }
 
-        // The interesting one. `VLCInstance.shared` would `try!` here; the
-        // throwing initializer lets `.instanceCreationFailed` be reported.
-        log("▶︎ stage 2 — VLCInstance(arguments:) [NOT .shared]")
+        // Proof-of-life for the main actor. If the main thread stalls, this
+        // stops advancing while the heartbeat below keeps writing.
+        let liveness = LivenessProbe()
+        tickTask = Task { @MainActor in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .milliseconds(100))
+                liveness.bumpMain()
+            }
+        }
+
+        // Independent GCD thread: immune to main-actor and to cooperative-pool
+        // starvation, so it keeps reporting even if everything else wedges.
+        liveness.startHeartbeat()
+
+        // The expensive one. Per SwiftVLC's own guidance this must not run on
+        // the main actor: "one-time plugin and decoder setup that can be
+        // expensive on iOS ... instead of blocking the main actor".
+        log("▶︎ stage 2 — VLCInstance on a DETACHED task (off the main actor)")
+        let creation = Task.detached(priority: .userInitiated) { () -> Result<VLCInstance, VLCError> in
+            do {
+                let instance = try VLCInstance(
+                    arguments: VLCInstance.defaultArguments + ["--verbose=2"],
+                    applicationName: "Swiftfin UltimaFin",
+                    httpUserAgent: "Swiftfin"
+                )
+                return .success(instance)
+            } catch {
+                return .failure(error)
+            }
+        }
+
         let instance: VLCInstance
-        do {
-            instance = try VLCInstance(
-                arguments: VLCInstance.defaultArguments + ["--verbose=2"],
-                applicationName: "Swiftfin UltimaFin",
-                httpUserAgent: "Swiftfin"
-            )
-        } catch {
+        switch await creation.value {
+        case let .success(created):
+            instance = created
+        case let .failure(error):
             let message = String(describing: error)
+            liveness.stop()
             log("❌ VLCInstance failed: \(message)")
-            log("   → libVLC could not initialize at all in this process.")
+            log("   → libVLC returned nil; it could not initialize in this process.")
             failure = "VLCInstance: \(message)"
             return
         }
+
+        liveness.stop()
         log("✅ libVLC \(instance.version) — ABI \(instance.abiVersion)")
         log("   compiler: \(instance.compiler)")
+        log("   → survived libvlc_new off the main actor.")
 
         // Subscribe before the player exists so module loading is captured.
         log("▶︎ stage 3 — attaching libVLC log stream")
@@ -255,19 +297,79 @@ struct UltimaFinPlayerView: View {
     }
 }
 
+// MARK: - Liveness probe
+
+/// Distinguishes "the main thread stalled and the OS killed us" from "we
+/// genuinely crashed", which look identical in a plain staged log.
+///
+/// `bumpMain()` is called from a main-actor loop; the heartbeat runs on its own
+/// GCD thread and prints the counter. A frozen counter beside a live heartbeat
+/// means the main actor is wedged.
+@available(iOS 18.0, *)
+private final class LivenessProbe: @unchecked Sendable {
+
+    private let lock = NSLock()
+    private var mainTicks = 0
+    private var running = true
+
+    func bumpMain() {
+        lock.lock()
+        mainTicks += 1
+        lock.unlock()
+    }
+
+    func stop() {
+        lock.lock()
+        running = false
+        lock.unlock()
+    }
+
+    private var snapshot: (running: Bool, ticks: Int) {
+        lock.lock()
+        defer { lock.unlock() }
+        return (running, mainTicks)
+    }
+
+    /// Fire-and-forget; ends when `stop()` is called or after a hard cap so a
+    /// forgotten probe cannot spin forever.
+    func startHeartbeat() {
+        DispatchQueue.global(qos: .utility).async { [self] in
+            let start = Date()
+            while true {
+                Thread.sleep(forTimeInterval: 0.5)
+                let state = snapshot
+                let elapsed = Date().timeIntervalSince(start)
+                guard state.running, elapsed < 120 else {
+                    DiagnosticLogFile.shared.write(
+                        String(format: "   .. heartbeat stopped at %.1fs (main ticks=%d)", elapsed, state.ticks)
+                    )
+                    return
+                }
+                DiagnosticLogFile.shared.write(
+                    String(format: "   .. alive %.1fs - main ticks=%d", elapsed, state.ticks)
+                )
+            }
+        }
+    }
+}
+
 // MARK: - Crash-surviving log file
 
 /// Appends lines to `Documents/UltimaFin-diagnostics.log` with unbuffered
 /// `write(2)` calls, so the trail is on disk even if the process dies on the
-/// very next instruction. Documents is user-visible, so the file can be read
-/// and shared from the Files app without a Mac.
+/// very next instruction. Documents is user-visible (`UIFileSharingEnabled`),
+/// so the file can be read and shared from the Files app without a Mac.
+///
+/// Written from the main actor *and* the heartbeat thread; each call is one
+/// `write` syscall, and interleaving whole lines is acceptable here.
 @available(iOS 18.0, *)
-private final class DiagnosticLogFile {
+private final class DiagnosticLogFile: @unchecked Sendable {
 
-    /// Opened exactly once per process. All writes come from `@MainActor`.
+    /// Opened exactly once per process.
     static let shared = DiagnosticLogFile()
 
     private let handle: FileHandle?
+    private let start = Date()
 
     private init() {
         let documents = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
@@ -277,7 +379,9 @@ private final class DiagnosticLogFile {
     }
 
     func write(_ line: String) {
-        guard let handle, let data = (line + "\n").data(using: .utf8) else { return }
+        guard let handle else { return }
+        let stamped = String(format: "[%7.3f] %@\n", Date().timeIntervalSince(start), line)
+        guard let data = stamped.data(using: .utf8) else { return }
         try? handle.write(contentsOf: data)
     }
 
