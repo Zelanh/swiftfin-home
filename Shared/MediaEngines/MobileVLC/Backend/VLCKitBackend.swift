@@ -140,7 +140,9 @@ final class VLCKitBackend: NSObject, MediaEngineSession {
     func selectAudioTrack(at index: Int) {
         let tracks = player.audioTracks
         guard tracks.indices.contains(index) else { return }
-        tracks[index].selectedExclusively = true
+        // Swift names an ObjC boolean property after its custom getter, so the
+        // settable spelling is `isSelectedExclusively`, not the declared name.
+        tracks[index].isSelectedExclusively = true
     }
 
     func selectSubtitleTrack(at index: Int?) {
@@ -151,7 +153,9 @@ final class VLCKitBackend: NSObject, MediaEngineSession {
 
         let tracks = player.textTracks
         guard tracks.indices.contains(index) else { return }
-        tracks[index].selectedExclusively = true
+        // Swift names an ObjC boolean property after its custom getter, so the
+        // settable spelling is `isSelectedExclusively`, not the declared name.
+        tracks[index].isSelectedExclusively = true
     }
 
     func setAudioOffset(_ offset: Duration) {
