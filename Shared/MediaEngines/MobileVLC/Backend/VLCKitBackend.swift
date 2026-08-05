@@ -188,7 +188,9 @@ final class VLCKitBackend: NSObject, MediaEngineSession {
         )
     }
 
-    private static func mapped(_ tracks: [VLCMediaPlayerTrack]) -> [MediaEngineTrack] {
+    // VLCKit 4 renames `VLCMediaPlayerTrack` to a nested `VLCMediaPlayer.Track`
+    // via NS_SWIFT_NAME, so the flat ObjC spelling does not exist in Swift.
+    private static func mapped(_ tracks: [VLCMediaPlayer.Track]) -> [MediaEngineTrack] {
         tracks.enumerated().map { index, track in
             MediaEngineTrack(
                 index: index,
