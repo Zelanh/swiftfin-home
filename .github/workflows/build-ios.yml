@@ -8,6 +8,9 @@ on:
       - main
       - "feature/**"
       - "chore/**"
+      # [MobileVLC4 fork] Experiment branches build too — the VLCKit 4
+      # migration cannot be validated locally, so CI is the only compiler.
+      - "experiment/**"
 
 jobs:
   build:
