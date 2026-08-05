@@ -1,3 +1,16 @@
-binary "https://code.videolan.org/videolan/VLCKit/raw/master/Packaging/MobileVLCKit.json" == 3.7.2
-binary "https://code.videolan.org/videolan/VLCKit/raw/master/Packaging/TVVLCKit.json" == 3.7.2
+# [MobileVLC4 fork] Single VLC engine, upgraded to VLCKit 4.
+#
+# VLCKit 4 unifies MobileVLCKit / TVVLCKit / VLCKit into one xcframework, so the
+# two 3.7.2 entries this replaces are gone. Upstream's own Carthage manifests
+# only list 3.x, hence the local VLCKit4.json — same pattern as
+# ChromeCastFramework.json.
+#
+# Pinned artifact (Carthage keys must be SemVer, so the alpha suffix lives here):
+#   VLCKit 4.0.0a22 — VLCKit-4.0-20260720-1538.zip
+#   sha256 d9de86d0c755cbcf46c49513ff57fffcd98258f0c7dd29f3e2d23bff3860da2a
+#   source: VLCKit master, Packaging/podspecs/VLCKit.podspec
+#
+# This is an alpha. Treat every bump as a small migration: rebuild, then re-run
+# the playback matrix on a real iPhone before accepting it.
+binary "VLCKit4.json" == 4.0.0
 binary "ChromeCastFramework.json"

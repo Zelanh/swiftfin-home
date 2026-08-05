@@ -8,7 +8,6 @@
 
 import AVFoundation
 import SwiftUI
-import VLCUI
 
 /// [Downloads fork] Self-contained offline player for downloaded items.
 ///
@@ -46,8 +45,9 @@ struct UltimaPlayerView: View {
     /// `nil` disables resume.
     let itemID: String?
 
+    // [MobileVLC4 fork] Was VLCUI's Proxy; now the fork's own engine facade.
     @StateObject
-    private var proxy: VLCVideoPlayer.Proxy = .init()
+    private var player: MediaEnginePlayer = .init()
 
     @State
     private var currentSeconds: Double = 0
@@ -81,8 +81,8 @@ struct UltimaPlayerView: View {
         var id: Int { index }
     }
 
-    private var configuration: VLCVideoPlayer.Configuration {
-        var configuration = VLCVideoPlayer.Configuration(url: url)
+    private var configuration: MediaEngineConfiguration {
+        var configuration = MediaEngineConfiguration(url: url)
         configuration.autoPlay = true
         if let resume = resumeSeconds {
             configuration.startSeconds = .seconds(resume)
@@ -106,24 +106,30 @@ struct UltimaPlayerView: View {
             Color.black
                 .ignoresSafeArea()
 
-            VLCVideoPlayer(configuration: configuration)
-                .proxy(proxy)
-                .onSecondsUpdated { newSeconds, _ in
-                    guard !isScrubbing else { return }
-                    let seconds = Double(newSeconds.components.seconds)
-                    // Keep within the slider's range (metadata runtime can be a
-                    // touch shorter than the real file).
-                    currentSeconds = runtimeSeconds > 0 ? min(seconds, runtimeSeconds) : seconds
+            player.videoView
+                .onAppear {
+                    player.load(configuration)
                 }
-                .onStateUpdated { state, info in
+                .backport
+                .onChange(of: player.playbackInfo) { _, info in
+                    if !isScrubbing {
+                        let seconds = Double(info.seconds.components.seconds)
+                        // Keep within the slider's range (metadata runtime can be
+                        // a touch shorter than the real file).
+                        currentSeconds = runtimeSeconds > 0 ? min(seconds, runtimeSeconds) : seconds
+                    }
+
+                    // Embedded tracks, read straight from the engine.
+                    audioTracks = info.audioTracks.map { Track(index: $0.index, title: $0.title ?? "") }
+                    subtitleTracks = info.subtitleTracks.map { Track(index: $0.index, title: $0.title ?? "") }
+                    currentAudioIndex = info.audioTracks.first(where: \.isSelected)?.index
+                    currentSubtitleIndex = info.subtitleTracks.first(where: \.isSelected)?.index
+                }
+                .backport
+                .onChange(of: player.state) { _, state in
                     switch state {
-                    case .playing, .esAdded:
-                        if state == .playing { isPlaying = true }
-                        // Read the file's embedded tracks straight from VLC.
-                        audioTracks = info.audioTracks.map { Track(index: $0.index, title: $0.title) }
-                        subtitleTracks = info.subtitleTracks.map { Track(index: $0.index, title: $0.title) }
-                        currentAudioIndex = info.currentAudioTrack.index
-                        currentSubtitleIndex = info.currentSubtitleTrack.index
+                    case .playing:
+                        isPlaying = true
                     case .paused:
                         isPlaying = false
                     case .ended:
@@ -185,7 +191,7 @@ struct UltimaPlayerView: View {
 
             HStack(spacing: 52) {
                 Button {
-                    proxy.jumpBackward(.seconds(10))
+                    player.jumpBackward(.seconds(10))
                     resetAutoHide()
                 } label: {
                     Image(systemName: "gobackward.10")
@@ -199,7 +205,7 @@ struct UltimaPlayerView: View {
                 }
 
                 Button {
-                    proxy.jumpForward(.seconds(10))
+                    player.jumpForward(.seconds(10))
                     resetAutoHide()
                 } label: {
                     Image(systemName: "goforward.10")
@@ -248,7 +254,7 @@ struct UltimaPlayerView: View {
             Menu {
                 ForEach(audioTracks) { track in
                     Button {
-                        proxy.setAudioTrack(.absolute(track.index))
+                        player.selectAudioTrack(at: track.index)
                         currentAudioIndex = track.index
                         resetAutoHide()
                     } label: {
@@ -265,7 +271,7 @@ struct UltimaPlayerView: View {
             Menu {
                 ForEach(subtitleTracks) { track in
                     Button {
-                        proxy.setSubtitleTrack(.absolute(track.index))
+                        player.selectSubtitleTrack(at: track.index < 0 ? nil : track.index)
                         currentSubtitleIndex = track.index
                         resetAutoHide()
                     } label: {
@@ -293,9 +299,9 @@ struct UltimaPlayerView: View {
     private func togglePlayPause() {
         // The state callback flips `isPlaying`; we drive the proxy here.
         if isPlaying {
-            proxy.pause()
+            player.pause()
         } else {
-            proxy.play()
+            player.play()
         }
         resetAutoHide()
     }
@@ -303,7 +309,7 @@ struct UltimaPlayerView: View {
     private func scrub(_ editing: Bool) {
         isScrubbing = editing
         if !editing {
-            proxy.setSeconds(.seconds(currentSeconds))
+            player.setSeconds(.seconds(currentSeconds))
             resetAutoHide()
         }
     }
@@ -345,7 +351,7 @@ struct UltimaPlayerView: View {
     private func deactivate() {
         autoHideTask?.cancel()
         saveResume()
-        proxy.stop()
+        player.stop()
         try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
     }
 

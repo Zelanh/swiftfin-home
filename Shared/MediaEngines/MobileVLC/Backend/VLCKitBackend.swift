@@ -1,0 +1,263 @@
+//
+// Swiftfin is subject to the terms of the Mozilla Public
+// License, v2.0. If a copy of the MPL was not distributed with this
+// file, you can obtain one at https://mozilla.org/MPL/2.0/.
+//
+// Copyright (c) 2026 Jellyfin & Jellyfin Contributors
+//
+
+import Foundation
+import UIKit
+import VLCKit
+
+// [MobileVLC4 fork]
+
+/// The one place in Swiftfin that knows VLCKit exists.
+///
+/// Everything VLCKit-shaped is confined here and translated into
+/// ``MediaEngineSession``. If VLCKit's API moves again — and on a 4.0 alpha it
+/// will — this file absorbs it and nothing above changes.
+@MainActor
+final class VLCKitBackend: NSObject, MediaEngineSession {
+
+    // MARK: Observation
+
+    var onStateChange: ((MediaEngineState) -> Void)?
+    var onTimeChange: ((MediaEnginePlaybackInfo) -> Void)?
+
+    // MARK: State
+
+    private let player: VLCMediaPlayer
+
+    /// Whether the stop we are about to observe is one we asked for.
+    ///
+    /// This is the whole `.ended` discriminator. libVLC 4 reports reaching the
+    /// end of a media and being stopped by the user as the same `Stopping`
+    /// state, so intent — not playback position — is what separates them.
+    private var didRequestStop = false
+
+    /// `Stopping` and `Stopped` both arrive for a single ending. Only the first
+    /// becomes a terminal event, or the app would try to advance twice.
+    private var didEmitTerminalState = false
+
+    /// Track selection and resume position can only be applied once the engine
+    /// has actually opened the media and published its track list.
+    private var pendingConfiguration: MediaEngineConfiguration?
+
+    // MARK: Lifecycle
+
+    /// - Parameter subtitleStyle: applied as engine-creation options, because
+    ///   VLCKit 4 no longer exposes subtitle font or colour as live properties.
+    ///   Only ``setSubtitleStyle(_:)``'s scale can change afterwards.
+    init(subtitleStyle: MediaEngineSubtitleStyle? = nil) {
+        player = VLCMediaPlayer(options: Self.engineOptions(for: subtitleStyle))
+        super.init()
+        player.delegate = self
+    }
+
+    private static func engineOptions(for style: MediaEngineSubtitleStyle?) -> [String] {
+        guard let style else { return [] }
+
+        var red: CGFloat = 0
+        var green: CGFloat = 0
+        var blue: CGFloat = 0
+        var alpha: CGFloat = 0
+        _ = style.color.getRed(&red, green: &green, blue: &blue, alpha: &alpha)
+
+        let packed = (Int(red * 255) << 16) | (Int(green * 255) << 8) | Int(blue * 255)
+
+        // libVLC ignores options it does not recognise, so a renamed option
+        // degrades to the default styling rather than failing to start.
+        return [
+            "--freetype-font=\(style.fontName)",
+            "--freetype-color=\(packed)",
+        ]
+    }
+
+    /// Hand the engine the view it should render into.
+    ///
+    /// On iOS the drawable is a plain `UIView`; `VLCVideoView` is macOS-only.
+    func attach(to view: UIView) {
+        player.drawable = view
+    }
+
+    func detach() {
+        player.drawable = nil
+    }
+
+    // MARK: MediaEngineSession
+
+    func load(_ configuration: MediaEngineConfiguration) {
+        didRequestStop = false
+        didEmitTerminalState = false
+        pendingConfiguration = configuration
+
+        guard let media = VLCMedia(url: configuration.url) else {
+            onStateChange?(.error)
+            return
+        }
+
+        for sidecar in configuration.sidecars {
+            let slave = VLCMediaSlave(
+                url: sidecar.url,
+                type: sidecar.kind == .subtitle ? .subtitle : .audio,
+                priority: sidecar.isEnforced ? 4 : 0
+            )
+            // Returns whether the engine accepted it; a rejected sidecar just
+            // means that subtitle is unavailable, not that playback should fail.
+            _ = media.addSlave(slave)
+        }
+
+        player.media = media
+        player.rate = configuration.rate
+
+        if configuration.autoPlay {
+            player.play()
+        }
+    }
+
+    func play() {
+        player.play()
+    }
+
+    func pause() {
+        player.pause()
+    }
+
+    func stop() {
+        didRequestStop = true
+        player.stop()
+    }
+
+    func setSeconds(_ seconds: Duration) {
+        player.time = VLCTime(int: Int32(clamping: seconds.microseconds / 1000))
+    }
+
+    func setRate(_ rate: Float) {
+        player.rate = rate
+    }
+
+    func selectAudioTrack(at index: Int) {
+        let tracks = player.audioTracks
+        guard tracks.indices.contains(index) else { return }
+        tracks[index].selectedExclusively = true
+    }
+
+    func selectSubtitleTrack(at index: Int?) {
+        guard let index else {
+            player.deselectAllTextTracks()
+            return
+        }
+
+        let tracks = player.textTracks
+        guard tracks.indices.contains(index) else { return }
+        tracks[index].selectedExclusively = true
+    }
+
+    func setAudioOffset(_ offset: Duration) {
+        player.currentAudioPlaybackDelay = Int(offset.microseconds)
+    }
+
+    func setSubtitleOffset(_ offset: Duration) {
+        player.currentVideoSubTitleDelay = Int(offset.microseconds)
+    }
+
+    func setSubtitleStyle(_ style: MediaEngineSubtitleStyle) {
+        // Only the scale is live in VLCKit 4; font and colour were fixed when
+        // this backend was created. See MediaEngineSubtitleStyle.
+        player.currentSubTitleFontScale = Float(style.size)
+    }
+
+    func setAspectFill(_ isAspectFill: Bool) {
+        // libVLC 4 replaced libVLC 3's crop-geometry strings with a fit mode.
+        player.videoFitMode = isAspectFill ? .larger : .smaller
+    }
+
+    // MARK: Snapshot
+
+    private func currentPlaybackInfo() -> MediaEnginePlaybackInfo {
+        let statistics = player.media?.statistics
+
+        return MediaEnginePlaybackInfo(
+            seconds: .milliseconds(Int(player.time.intValue)),
+            videoSize: player.videoSize,
+            droppedFrames: Int(statistics?.lostPictures ?? 0),
+            corruptedFrames: Int(statistics?.demuxCorrupted ?? 0),
+            audioTracks: Self.mapped(player.audioTracks),
+            subtitleTracks: Self.mapped(player.textTracks)
+        )
+    }
+
+    private static func mapped(_ tracks: [VLCMediaPlayerTrack]) -> [MediaEngineTrack] {
+        tracks.enumerated().map { index, track in
+            MediaEngineTrack(
+                index: index,
+                id: track.trackId,
+                title: track.trackName,
+                isSelected: track.isSelected
+            )
+        }
+    }
+
+    /// Apply the parts of a configuration that need a live, opened media.
+    ///
+    /// Track lists do not exist until the engine has parsed the stream, and a
+    /// resume seek before that is discarded, so both wait for the first
+    /// `playing`.
+    private func applyPendingConfiguration() {
+        guard let configuration = pendingConfiguration else { return }
+        pendingConfiguration = nil
+
+        if let audioTrackIndex = configuration.audioTrackIndex {
+            selectAudioTrack(at: audioTrackIndex)
+        }
+
+        selectSubtitleTrack(at: configuration.subtitleTrackIndex)
+
+        if configuration.startSeconds > .zero {
+            setSeconds(configuration.startSeconds)
+        }
+    }
+}
+
+// MARK: - VLCMediaPlayerDelegate
+
+extension VLCKitBackend: VLCMediaPlayerDelegate {
+
+    func mediaPlayerStateChanged(_ newState: VLCMediaPlayerState) {
+        switch newState {
+        case .opening:
+            onStateChange?(.opening)
+        case .playing:
+            applyPendingConfiguration()
+            onStateChange?(.playing)
+        case .paused:
+            onStateChange?(.paused)
+        case .error:
+            didEmitTerminalState = true
+            onStateChange?(.error)
+        case .stopping,
+             .stopped:
+            // Both arrive for one ending; report the first and ignore the rest.
+            guard !didEmitTerminalState else { return }
+            didEmitTerminalState = true
+            onStateChange?(didRequestStop ? .stopped : .ended)
+        case .nothingSpecial:
+            break
+        @unknown default:
+            break
+        }
+    }
+
+    func mediaPlayerTimeChanged(_ aNotification: Notification) {
+        onTimeChange?(currentPlaybackInfo())
+    }
+
+    func mediaPlayerBufferingChanged(_ progress: Float) {
+        // libVLC 4 dropped the buffering *state*; this callback is what is left.
+        // It is documented to fire with 0.0 and 1.0 around a successful start,
+        // so only an incomplete buffer counts as buffering.
+        guard progress < 1.0, !didEmitTerminalState else { return }
+        onStateChange?(.buffering)
+    }
+}

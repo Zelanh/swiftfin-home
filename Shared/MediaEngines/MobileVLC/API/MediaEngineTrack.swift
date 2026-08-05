@@ -28,6 +28,9 @@ struct MediaEngineTrack: Hashable, Identifiable {
 
     /// Human-readable name, when the container provides one.
     let title: String?
+
+    /// Whether the engine is currently playing this track.
+    let isSelected: Bool
 }
 
 /// A subtitle or audio file that lives beside the media rather than inside it.
@@ -51,7 +54,7 @@ struct MediaEngineSidecar: Hashable {
 ///
 /// Delivered on time updates so the player overlay, the scrubber and the
 /// playback-information supplement all read from one snapshot.
-struct MediaEnginePlaybackInfo {
+struct MediaEnginePlaybackInfo: Equatable {
 
     let seconds: Duration
     let videoSize: CGSize
