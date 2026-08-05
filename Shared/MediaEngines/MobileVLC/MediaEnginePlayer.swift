@@ -32,17 +32,38 @@ final class MediaEnginePlayer: ObservableObject {
     @Published
     private(set) var playbackInfo: MediaEnginePlaybackInfo = .empty
 
+    /// Whether Picture in Picture can be started right now.
+    ///
+    /// VLCKit only offers a controller once video output is running, so this
+    /// stays false until playback has actually begun — which is the honest
+    /// signal for whether to show the button.
+    @Published
+    private(set) var isPictureInPictureAvailable = false
+
+    /// Whether playback is currently in the floating PiP window.
+    @Published
+    private(set) var isPictureInPictureActive = false
+
     private let backend: VLCKitBackend
 
     init(subtitleStyle: MediaEngineSubtitleStyle? = nil) {
         backend = VLCKitBackend(subtitleStyle: subtitleStyle)
 
         backend.onStateChange = { [weak self] newState in
-            self?.state = newState
+            guard let self else { return }
+            self.state = newState
+
+            // Availability is polled off state changes rather than observed:
+            // VLCKit hands the controller over without announcing it.
+            self.isPictureInPictureAvailable = self.backend.isPictureInPictureAvailable
         }
 
         backend.onTimeChange = { [weak self] info in
             self?.playbackInfo = info
+        }
+
+        backend.onPictureInPictureChange = { [weak self] isActive in
+            self?.isPictureInPictureActive = isActive
         }
     }
 
@@ -51,6 +72,12 @@ final class MediaEnginePlayer: ObservableObject {
     /// The view libVLC renders into. Place it behind Swiftfin's own controls.
     var videoView: some View {
         MediaEngineVideoView(backend: backend)
+    }
+
+    // MARK: Picture in Picture
+
+    func startPictureInPicture() {
+        backend.startPictureInPicture()
     }
 
     // MARK: Playback
@@ -134,17 +161,10 @@ private struct MediaEngineVideoView: UIViewRepresentable {
 
     let backend: VLCKitBackend
 
+    // The view belongs to the engine's drawable rather than being made here:
+    // VLCKit needs a PiP-capable drawable that outlives any one SwiftUI pass.
     func makeUIView(context: Context) -> UIView {
-        let view = UIView()
-        view.backgroundColor = .black
-
-        // libVLC sizes its output from the drawable's own bounds, so the view
-        // must track its parent rather than wait on SwiftUI's layout pass.
-        view.autoresizingMask = [.flexibleWidth, .flexibleHeight]
-
-        backend.attach(to: view)
-
-        return view
+        backend.videoView
     }
 
     func updateUIView(_ uiView: UIView, context: Context) {}

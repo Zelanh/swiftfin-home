@@ -74,15 +74,36 @@ final class VLCKitBackend: NSObject, MediaEngineSession {
         ]
     }
 
-    /// Hand the engine the view it should render into.
-    ///
-    /// On iOS the drawable is a plain `UIView`; `VLCVideoView` is macOS-only.
-    func attach(to view: UIView) {
-        player.drawable = view
+    // MARK: Video surface and Picture in Picture
+
+    /// The drawable is created up front and kept for the engine's lifetime:
+    /// VLCKit only offers a PiP controller for a drawable that declares itself
+    /// PiP-capable, and it does so asynchronously once output is running.
+    private lazy var drawable: VLCKitDrawable = {
+        let drawable = VLCKitDrawable(player: player)
+        player.drawable = drawable
+        return drawable
+    }()
+
+    /// The view to place behind Swiftfin's own controls.
+    var videoView: UIView {
+        drawable.view
     }
 
-    func detach() {
-        player.drawable = nil
+    /// Whether VLCKit has handed us a PiP controller yet. False on a device or
+    /// a media that cannot do it, so the button can hide rather than lie.
+    var isPictureInPictureAvailable: Bool {
+        drawable.isPictureInPictureAvailable
+    }
+
+    func startPictureInPicture() {
+        drawable.startPictureInPicture()
+    }
+
+    /// Notified on the main thread when PiP starts or stops.
+    var onPictureInPictureChange: ((Bool) -> Void)? {
+        get { drawable.onPictureInPictureChange }
+        set { drawable.onPictureInPictureChange = newValue }
     }
 
     // MARK: MediaEngineSession
@@ -270,8 +291,12 @@ extension VLCKitBackend: VLCMediaPlayerDelegate {
         case .playing:
             applyPendingConfiguration()
             onStateChange?(.playing)
+            // PiP renders its own transport controls from our media-controlling
+            // answers; without this nudge they keep showing the previous state.
+            drawable.invalidatePlaybackState()
         case .paused:
             onStateChange?(.paused)
+            drawable.invalidatePlaybackState()
         case .error:
             didEmitTerminalState = true
             onStateChange?(.error)

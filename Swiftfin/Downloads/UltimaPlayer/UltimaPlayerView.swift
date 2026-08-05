@@ -75,6 +75,14 @@ struct UltimaPlayerView: View {
     @State
     private var currentSubtitleIndex: Int?
 
+    // [MobileVLC4 fork] Presentation options the overflow menu drives. Local
+    // state rather than Defaults: these are per-playback choices, and the
+    // offline player deliberately keeps no session of its own.
+    @State
+    private var isAspectFill = false
+    @State
+    private var rate: Float = 1
+
     struct Track: Identifiable {
         let index: Int
         let title: String
@@ -249,49 +257,20 @@ struct UltimaPlayerView: View {
     /// when the file has more than one track; subtitles when it has at least one
     /// real subtitle (VLC also lists a "Disable" entry to turn them off).
     @ViewBuilder
+    // [MobileVLC4 fork] Was two separate icons for audio and subtitles; now one
+    // overflow menu matching the online player, which also gives speed, aspect
+    // fill and Picture in Picture somewhere to live.
     private var trackMenus: some View {
-        if audioTracks.count > 1 {
-            Menu {
-                ForEach(audioTracks) { track in
-                    Button {
-                        player.selectAudioTrack(at: track.index)
-                        currentAudioIndex = track.index
-                        resetAutoHide()
-                    } label: {
-                        trackLabel(track.title, selected: currentAudioIndex == track.index)
-                    }
-                }
-            } label: {
-                Image(systemName: "waveform")
-                    .font(.title3)
-            }
-        }
-
-        if subtitleTracks.contains(where: { $0.index >= 0 }) {
-            Menu {
-                ForEach(subtitleTracks) { track in
-                    Button {
-                        player.selectSubtitleTrack(at: track.index < 0 ? nil : track.index)
-                        currentSubtitleIndex = track.index
-                        resetAutoHide()
-                    } label: {
-                        trackLabel(track.title, selected: currentSubtitleIndex == track.index)
-                    }
-                }
-            } label: {
-                Image(systemName: "captions.bubble")
-                    .font(.title3)
-            }
-        }
-    }
-
-    @ViewBuilder
-    private func trackLabel(_ title: String, selected: Bool) -> some View {
-        if selected {
-            Label(title, systemImage: "checkmark")
-        } else {
-            Text(title)
-        }
+        UltimaPlayerMenu(
+            player: player,
+            audioTracks: audioTracks,
+            subtitleTracks: subtitleTracks,
+            currentAudioIndex: $currentAudioIndex,
+            currentSubtitleIndex: $currentSubtitleIndex,
+            isAspectFill: $isAspectFill,
+            rate: $rate,
+            onInteraction: resetAutoHide
+        )
     }
 
     // MARK: Actions
