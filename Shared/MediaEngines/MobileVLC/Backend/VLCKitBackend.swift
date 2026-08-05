@@ -228,9 +228,42 @@ final class VLCKitBackend: NSObject, MediaEngineSession {
 
 // MARK: - VLCMediaPlayerDelegate
 
+/// libVLC 4 delivers these callbacks on its own threads, and often from *inside*
+/// the player's event dispatch while `vlc_player_Lock` is already held. That lock
+/// is not recursive: reading any `VLCMediaPlayer` property from here re-enters it
+/// and aborts the process — which is exactly what pausing used to do, by way of
+/// `decoder_on_output_paused` → time discontinuity → `videoSize`.
+///
+/// So every callback does nothing but hop to the main actor. By the time the hop
+/// runs, the event has returned and the lock is free. It also puts the
+/// `@Published` updates on the thread SwiftUI requires, which is the other half
+/// of why the overlay looked frozen.
 extension VLCKitBackend: VLCMediaPlayerDelegate {
 
-    func mediaPlayerStateChanged(_ newState: VLCMediaPlayerState) {
+    nonisolated func mediaPlayerStateChanged(_ newState: VLCMediaPlayerState) {
+        Task { @MainActor [weak self] in
+            self?.handle(newState)
+        }
+    }
+
+    nonisolated func mediaPlayerTimeChanged(_ aNotification: Notification) {
+        // `aNotification` is deliberately not captured: it is not Sendable, and
+        // the snapshot is read fresh on the main actor anyway.
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            self.onTimeChange?(self.currentPlaybackInfo())
+        }
+    }
+
+    nonisolated func mediaPlayerBufferingChanged(_ progress: Float) {
+        Task { @MainActor [weak self] in
+            self?.handleBuffering(progress)
+        }
+    }
+
+    // MARK: Main-actor handlers
+
+    private func handle(_ newState: VLCMediaPlayerState) {
         switch newState {
         case .opening:
             onStateChange?(.opening)
@@ -255,15 +288,18 @@ extension VLCKitBackend: VLCMediaPlayerDelegate {
         }
     }
 
-    func mediaPlayerTimeChanged(_ aNotification: Notification) {
-        onTimeChange?(currentPlaybackInfo())
-    }
+    private func handleBuffering(_ progress: Float) {
+        // libVLC 4 dropped the buffering *state*; this callback is what is left,
+        // and on a network stream it fires repeatedly. Reporting `.buffering`
+        // without ever taking it back left the overlay showing a spinner for the
+        // rest of playback — the reason the online player's controls were dead
+        // while the offline one, which never rebuffers, behaved.
+        guard !didEmitTerminalState else { return }
 
-    func mediaPlayerBufferingChanged(_ progress: Float) {
-        // libVLC 4 dropped the buffering *state*; this callback is what is left.
-        // It is documented to fire with 0.0 and 1.0 around a successful start,
-        // so only an incomplete buffer counts as buffering.
-        guard progress < 1.0, !didEmitTerminalState else { return }
-        onStateChange?(.buffering)
+        if progress < 1.0 {
+            onStateChange?(.buffering)
+        } else if player.isPlaying {
+            onStateChange?(.playing)
+        }
     }
 }
