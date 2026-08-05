@@ -24,6 +24,56 @@
 
 ---
 
+## ⛔ This branch is a discarded experiment
+
+**Branch `experiment/swiftvlc-player` — abandoned 2026-08-05. Do not build or
+merge it.** Work continues on `feature/offline-downloads` and its successors.
+
+**What was tried:** adding [SwiftVLC](https://github.com/harflabs/SwiftVLC)
+(libVLC 4.0, pure Swift) *alongside* the existing MobileVLCKit 3.7.2, to get a
+third, PiP-capable player for downloaded files without touching the online one.
+
+**What happened:** it compiled and linked cleanly — no duplicate-symbol errors —
+and online playback kept working. But **every** attempt to open a downloaded
+file killed the app instantly, ~150 ms in, before any media object existed. A
+staged on-device log plus the iOS crash report pinned it down:
+
+```text
+EXC_BAD_ACCESS (SIGSEGV), KERN_INVALID_ADDRESS at 0x1c
+  vlc_mutex_lock                                    ← null pointer + field offset
+  var_SetChecked
+  VLCInstance.__allocating_init(...)
+  closure #2 in UltimaFinPlayerView.boot()
+```
+
+The crash report lists **both engines loaded in the one process**:
+`Swiftfin iOS.debug.dylib` (SwiftVLC's static libVLC 4) *and*
+`MobileVLCKit.framework` (libVLC 3.7.2).
+
+**Why it cannot be fixed on this branch:** each ships a complete, independent
+libVLC. SwiftVLC's own `IntegrationTopology.md` requires the libvlc archive to
+exist **exactly once** among a process's images — two copies mean duplicate
+Objective-C classes resolved arbitrarily at launch and two plugin registries.
+Their CI enforces this by counting which images define `_libvlc_new`; ours
+defines it twice. No amount of error handling helps: the failing pointer is
+already null by the time any Swift code could check it, and the fatal paths in
+`VLCInstance.shared` / `Player.init` are `try!` and `preconditionFailure`.
+
+Two hypotheses were tested and **disproved** along the way: that the media file
+or container was at fault (the log confirms the file present and 199 MB), and
+that libVLC's expensive first-instance setup was stalling the main actor into a
+watchdog kill (a liveness probe on an independent thread produced *zero*
+heartbeats — the process died in under half a second, and the crash report says
+`SIGSEGV`, not a watchdog `SIGKILL`).
+
+**Where it goes next:** one engine per process, upgraded rather than doubled —
+migrate the single VLC stack to **VLCKit 4**, whose public
+`VLCPictureInPictureMediaControlling` / `VLCPictureInPictureWindowControlling`
+protocols provide the native PiP this experiment was chasing, and build the
+custom player on that.
+
+---
+
 ## What this fork does
 
 - Adds a Cast button in **two places**: on the item detail page (cast
