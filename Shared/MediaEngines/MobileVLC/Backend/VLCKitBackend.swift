@@ -164,12 +164,31 @@ final class VLCKitBackend: NSObject, MediaEngineSession {
         player.rate = rate
     }
 
+    // MARK: Track indexes
+
+    // Swiftfin speaks **container positions**: one sequence numbering every
+    // track in the media, video first, then audio, then subtitles — that is what
+    // `MediaTrackIndexMap` maps Jellyfin's stream indexes onto. VLCKit 4 instead
+    // hands back a separate array per type. Translating between the two is this
+    // layer's job; getting it wrong made every track button on the online player
+    // silently do nothing, because a container position ran off the end of the
+    // per-type array and the bounds check swallowed it.
+
+    private var audioTrackOffset: Int {
+        player.videoTracks.count
+    }
+
+    private var subtitleTrackOffset: Int {
+        player.videoTracks.count + player.audioTracks.count
+    }
+
     func selectAudioTrack(at index: Int) {
         let tracks = player.audioTracks
-        guard tracks.indices.contains(index) else { return }
+        let position = index - audioTrackOffset
+        guard tracks.indices.contains(position) else { return }
         // Swift names an ObjC boolean property after its custom getter, so the
         // settable spelling is `isSelectedExclusively`, not the declared name.
-        tracks[index].isSelectedExclusively = true
+        tracks[position].isSelectedExclusively = true
     }
 
     func selectSubtitleTrack(at index: Int?) {
@@ -179,10 +198,9 @@ final class VLCKitBackend: NSObject, MediaEngineSession {
         }
 
         let tracks = player.textTracks
-        guard tracks.indices.contains(index) else { return }
-        // Swift names an ObjC boolean property after its custom getter, so the
-        // settable spelling is `isSelectedExclusively`, not the declared name.
-        tracks[index].isSelectedExclusively = true
+        let position = index - subtitleTrackOffset
+        guard tracks.indices.contains(position) else { return }
+        tracks[position].isSelectedExclusively = true
     }
 
     func setAudioOffset(_ offset: Duration) {
@@ -214,17 +232,21 @@ final class VLCKitBackend: NSObject, MediaEngineSession {
             videoSize: player.videoSize,
             droppedFrames: Int(statistics?.lostPictures ?? 0),
             corruptedFrames: Int(statistics?.demuxCorrupted ?? 0),
-            audioTracks: Self.mapped(player.audioTracks),
-            subtitleTracks: Self.mapped(player.textTracks)
+            audioTracks: Self.mapped(player.audioTracks, offsetBy: audioTrackOffset),
+            subtitleTracks: Self.mapped(player.textTracks, offsetBy: subtitleTrackOffset)
         )
     }
 
-    // VLCKit 4 renames `VLCMediaPlayerTrack` to a nested `VLCMediaPlayer.Track`
-    // via NS_SWIFT_NAME, so the flat ObjC spelling does not exist in Swift.
-    private static func mapped(_ tracks: [VLCMediaPlayer.Track]) -> [MediaEngineTrack] {
-        tracks.enumerated().map { index, track in
+    /// - Parameter offset: shifts the per-type array position into the container
+    ///   position Swiftfin speaks, so a reported index can be handed straight
+    ///   back to `selectAudioTrack`/`selectSubtitleTrack`.
+    ///
+    /// VLCKit 4 renames `VLCMediaPlayerTrack` to a nested `VLCMediaPlayer.Track`
+    /// via NS_SWIFT_NAME, so the flat ObjC spelling does not exist in Swift.
+    private static func mapped(_ tracks: [VLCMediaPlayer.Track], offsetBy offset: Int) -> [MediaEngineTrack] {
+        tracks.enumerated().map { position, track in
             MediaEngineTrack(
-                index: index,
+                index: offset + position,
                 id: track.trackId,
                 title: track.trackName,
                 isSelected: track.isSelected
@@ -249,6 +271,12 @@ final class VLCKitBackend: NSObject, MediaEngineSession {
 
         if configuration.startSeconds > .zero {
             setSeconds(configuration.startSeconds)
+        }
+
+        // Re-applied here as well as in `load`: libVLC resets the rate when it
+        // starts a new media, so a rate set before playback began is discarded.
+        if configuration.rate != 1 {
+            player.rate = configuration.rate
         }
     }
 }
