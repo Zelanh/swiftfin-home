@@ -266,12 +266,13 @@ has to present a PiP-capable drawable.
 
 ### The rule this branch follows
 
-> Exactly **one file** in the repository imports `VLCKit`. Everything else talks
-> to `MediaEnginePlayer`, which names no engine type. Swapping engines again
-> means rewriting one file.
+> `VLCKit` is imported **only inside `Backend/`** — two files, and nothing else
+> in the repository names an engine type. Everything above talks to
+> `MediaEnginePlayer`. Swapping engines again means rewriting that one folder.
 
 ```bash
-grep -rn "import VLCKit" --include="*.swift" .   # must return exactly 1 hit
+# Must return exactly 2 hits, both under Shared/MediaEngines/MobileVLC/Backend/
+grep -rn "import VLCKit" --include="*.swift" .
 grep -rn "\[MobileVLC4 fork\]" Shared Swiftfin --include="*.swift"
 ```
 

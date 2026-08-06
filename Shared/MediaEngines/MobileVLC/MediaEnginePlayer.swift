@@ -19,7 +19,7 @@ import UIKit
 /// old VLCUI proxy offered — the same verbs, without VLCUI's types.
 ///
 /// This is the only type playback code needs. ``VLCKitBackend`` stays private
-/// behind it, which is what keeps `import VLCKit` down to a single file.
+/// behind it, which is what keeps `import VLCKit` inside `Backend/`.
 @MainActor
 final class MediaEnginePlayer: ObservableObject {
 
