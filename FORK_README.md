@@ -131,7 +131,11 @@ users. Skim these before assuming something is broken:
 
 This fork adds **two iOS features** on top of upstream Swiftfin:
 **Chromecast** (shipped in v1.5.0) and **offline Downloads** (newer, still
-stabilising toward a release). Both follow the same rule, which is the whole
+stabilising toward a release). A third change — migrating the **video engine to
+VLCKit 4** to gain Picture in Picture — is not merged and is documented
+separately in
+[Branch `experiment/vlckit4`](#branch-experimentvlckit4--vlckit-4-alpha-22-media-engine).
+Both features follow the same rule, which is the whole
 point of this section:
 
 > As much code as possible lives in **one owned folder per feature**, every
@@ -228,6 +232,108 @@ grep -rn "\[Downloads fork\]" Shared Swiftfin --include="*.swift"
 > `ActionButtonHStack.swift` appears in **both** feature lists — it's the shared
 > item-detail button row. The two mounts (Cast button, Download button) are
 > independent and separately tagged.
+
+---
+
+## Branch `experiment/vlckit4` — VLCKit 4 (alpha 22) media engine
+
+> **Status: not merged.** Lives on `experiment/vlckit4`, branched from
+> `feature/offline-downloads`. Builds green and plays; documented here so the
+> surface is known if it ever goes upstream.
+
+### What it does
+
+Replaces the video engine. Upstream Swiftfin plays through **VLCUI** (a SwiftUI
+wrapper) on top of **MobileVLCKit 3.7.2** / **TVVLCKit**. This branch drops both
+and drives **VLCKit 4.0.0a22** — one unified xcframework for iOS and tvOS —
+behind a small facade the fork owns.
+
+The motivation was **Picture in Picture**. libVLC 3 has no PiP path; VLCKit 4
+ships one and owns the `AVPictureInPictureController` itself, so the app only
+has to present a PiP-capable drawable.
+
+**What it bought:**
+
+- **PiP in the offline player**, via a menu button.
+- **PiP in the app's own online player, for free** — both players share the
+  engine, so the drawable declares itself PiP-capable in both. iOS then offers
+  the system swipe-up gesture without a single line of player-specific code.
+- **One overflow menu** in the offline player (aspect fill, PiP, audio,
+  subtitles, speed) replacing two lone icons, matching the online player's.
+- A fixed offline bug: libVLC 3 published a synthetic "Disable" subtitle track
+  and the old menu relied on it. VLCKit 4 does not, so there had been **no way
+  to turn subtitles off**. Now there's an explicit "None".
+
+### The rule this branch follows
+
+> Exactly **one file** in the repository imports `VLCKit`. Everything else talks
+> to `MediaEnginePlayer`, which names no engine type. Swapping engines again
+> means rewriting one file.
+
+```bash
+grep -rn "import VLCKit" --include="*.swift" .   # must return exactly 1 hit
+grep -rn "\[MobileVLC4 fork\]" Shared Swiftfin --include="*.swift"
+```
+
+### Our folder — `Shared/MediaEngines/MobileVLC/`
+
+In `Shared/` rather than `Swiftfin/` because `MediaPlayerProxy+VLC.swift` is
+itself shared, and VLCKit 4 being unified means **one code path serves iOS and
+tvOS** instead of `#if os()` throughout.
+
+| File | Role |
+|---|---|
+| `MediaEnginePlayer.swift` | What playback code holds: an `ObservableObject` with the verbs the old VLCUI proxy had, plus the SwiftUI video surface. The engine stays private behind it |
+| `API/MediaEngineSession.swift` | The engine contract. Outside this folder, no VLCKit type appears in any signature |
+| `API/MediaEngineState.swift` | Playback states, including the **synthesised `.ended`** (see below) |
+| `API/MediaEngineTrack.swift` | Tracks, sidecar subtitles, and the playback snapshot the UI reads |
+| `API/MediaEngineConfiguration.swift` | What to play and how — URL, resume point, track choices, subtitle style |
+| `Backend/VLCKitBackend.swift` | **The only file that imports VLCKit** |
+| `Backend/VLCKitDrawable.swift` | The render surface and the PiP bridge |
+
+Plus `Swiftfin/Downloads/UltimaPlayer/UltimaPlayerMenu.swift` — the offline
+overflow menu (belongs to the Downloads feature's folder).
+
+### Touch area on **upstream Swiftfin**
+
+Five base files, and only one of them is a real rewrite:
+
+| Base file | Change |
+|---|---|
+| `Shared/Objects/.../MediaPlayerProxy/MediaPlayerProxy+VLC.swift` | **Rewritten** to drive `MediaEnginePlayer` instead of VLCUI. Class name unchanged, so `VideoPlayer.swift`, the overlays and `MediaPlayerManager` need no edit |
+| `Shared/Extensions/JellyfinAPI/MediaStream.swift` | −17 lines: `asVLCPlaybackChild` moved out to the adapter. Resolving a stream into something an engine can open isn't the Jellyfin model's job |
+| `Shared/Strings/ProperNouns.swift` | +6 lines: `"Picture in Picture"`, which Apple ships untranslated |
+| `Shared/Objects/MediaPlayerManager/MediaPlayerManager.swift` | −1 line: unused `import VLCUI` |
+| `Swiftfin/Views/VideoPlayer/VideoPlayer+KeyCommands.swift` | −1 line: unused `import VLCUI` |
+
+Fork-owned files also changed: `UltimaPlayer/UltimaPlayerView.swift` (menu swap).
+
+**Project & dependencies**
+
+| File | Change |
+|---|---|
+| `Cartfile` | MobileVLCKit + TVVLCKit → `binary "VLCKit4.json" == 4.0.0` |
+| `VLCKit4.json` | **New.** Pins the artifact. VideoLAN publishes no Carthage manifest for 4.x, and Carthage keys must be SemVer — so the real build (`4.0.0a22`, `VLCKit-4.0-20260720-1538.zip`) is recorded in the `Cartfile` comment |
+| `Swiftfin.xcodeproj/project.pbxproj` | −36 lines net: both kit references retargeted to `VLCKit.xcframework`, and the **VLCUI Swift package removed entirely** |
+| `.github/workflows/build-ios.yml` | +3: build `experiment/**` branches |
+
+### Things learned the hard way (worth keeping)
+
+- **Never call the player from inside a libVLC callback.** VLCKit 4 delivers
+  delegate callbacks from its own event dispatch with the player lock held, and
+  `vlc_player_Lock` is **not recursive**. Reading any property from a callback
+  trips an assertion and aborts the process — pausing did exactly this. Every
+  callback now hops to the main actor first. VLCKit 3 tolerated this; 4 does not.
+- **`.ended` no longer exists.** Reaching the end and being stopped both surface
+  as `Stopping`, so the discriminator is our own intent flag, not playback
+  position. Both `Stopping` and `Stopped` arrive for one ending, so only the
+  first becomes terminal or a series advances twice.
+- **Buffering is a progress callback, not a state.** It fires repeatedly on a
+  network stream; reporting it without ever taking it back leaves the overlay
+  spinning with dead controls.
+- **Swift renames things.** `VLCMediaPlayerTrack` → `VLCMediaPlayer.Track` via
+  `NS_SWIFT_NAME`, and boolean properties import under their custom getter
+  (`isSelectedExclusively`, not `selectedExclusively`).
 
 ---
 
