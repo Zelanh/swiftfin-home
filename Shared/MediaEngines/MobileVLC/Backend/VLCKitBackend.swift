@@ -136,7 +136,7 @@ final class VLCKitBackend: NSObject, MediaEngineSession {
         }
 
         player.media = media
-        player.rate = configuration.rate
+        setRate(configuration.rate)
 
         if configuration.autoPlay {
             player.play()
@@ -160,8 +160,35 @@ final class VLCKitBackend: NSObject, MediaEngineSession {
         player.time = VLCTime(int: Int32(clamping: seconds.microseconds / 1000))
     }
 
+    /// The rate the app asked for, which is not always the rate libVLC adopts.
+    ///
+    /// VLCKit's setter is a direct passthrough to `libvlc_media_player_set_rate`,
+    /// yet on VLCKit 4 a rate set mid-playback did not stick — it only took
+    /// effect when applied as the media started. libVLC calls this the
+    /// *requested* rate and reserves the right to ignore it, so rather than
+    /// guess at the cause we re-assert the request a few times and let the
+    /// engine settle.
+    private var requestedRate: Float = 1
+    private var rateReassertionsRemaining = 0
+
     func setRate(_ rate: Float) {
+        requestedRate = rate
+        rateReassertionsRemaining = 5
         player.rate = rate
+    }
+
+    /// Called from the time callback, where the player lock is already released.
+    private func reassertRateIfNeeded() {
+        guard rateReassertionsRemaining > 0 else { return }
+
+        guard abs(player.rate - requestedRate) > 0.01 else {
+            // It took. Stop watching until the next request.
+            rateReassertionsRemaining = 0
+            return
+        }
+
+        rateReassertionsRemaining -= 1
+        player.rate = requestedRate
     }
 
     // MARK: Track indexes
@@ -273,11 +300,10 @@ final class VLCKitBackend: NSObject, MediaEngineSession {
             setSeconds(configuration.startSeconds)
         }
 
-        // Re-applied here as well as in `load`: libVLC resets the rate when it
-        // starts a new media, so a rate set before playback began is discarded.
-        if configuration.rate != 1 {
-            player.rate = configuration.rate
-        }
+        // Re-applied here as well as in `load`, through `setRate` so it gets the
+        // same re-assertion treatment: a rate set before playback begins is
+        // discarded when libVLC starts the media.
+        setRate(configuration.rate)
     }
 }
 
@@ -306,6 +332,7 @@ extension VLCKitBackend: VLCMediaPlayerDelegate {
         // the snapshot is read fresh on the main actor anyway.
         Task { @MainActor [weak self] in
             guard let self else { return }
+            self.reassertRateIfNeeded()
             self.onTimeChange?(self.currentPlaybackInfo())
         }
     }
