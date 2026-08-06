@@ -83,7 +83,12 @@ struct UltimaPlayerView: View {
     @State
     private var rate: Float = 1
 
-    struct Track: Identifiable {
+    // [MobileVLC4 fork] `Equatable` is load-bearing, not decoration: without it
+    // `[Track]` is not comparable either, so SwiftUI cannot tell that a state
+    // assignment changed nothing. The track lists are rebuilt on every time
+    // update — several times a second — and that rebuilt the open menu each
+    // time, which read as a faint heartbeat flicker.
+    struct Track: Identifiable, Equatable {
         let index: Int
         let title: String
         var id: Int { index }
@@ -127,9 +132,20 @@ struct UltimaPlayerView: View {
                         currentSeconds = runtimeSeconds > 0 ? min(seconds, runtimeSeconds) : seconds
                     }
 
-                    // Embedded tracks, read straight from the engine.
-                    audioTracks = info.audioTracks.map { Track(index: $0.index, title: $0.title ?? "") }
-                    subtitleTracks = info.subtitleTracks.map { Track(index: $0.index, title: $0.title ?? "") }
+                    // Embedded tracks, read straight from the engine. Assigned
+                    // only when they actually differ: this closure runs on every
+                    // time update, and a redundant write would rebuild the menu
+                    // under the user's finger.
+                    let newAudioTracks = info.audioTracks.map { Track(index: $0.index, title: $0.title ?? "") }
+                    if newAudioTracks != audioTracks {
+                        audioTracks = newAudioTracks
+                    }
+
+                    let newSubtitleTracks = info.subtitleTracks.map { Track(index: $0.index, title: $0.title ?? "") }
+                    if newSubtitleTracks != subtitleTracks {
+                        subtitleTracks = newSubtitleTracks
+                    }
+
                     currentAudioIndex = info.audioTracks.first(where: \.isSelected)?.index
                     currentSubtitleIndex = info.subtitleTracks.first(where: \.isSelected)?.index
                 }
@@ -263,6 +279,7 @@ struct UltimaPlayerView: View {
     private var trackMenus: some View {
         UltimaPlayerMenu(
             player: player,
+            isPictureInPictureAvailable: player.isPictureInPictureAvailable,
             audioTracks: audioTracks,
             subtitleTracks: subtitleTracks,
             currentAudioIndex: $currentAudioIndex,

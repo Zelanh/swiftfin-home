@@ -27,11 +27,17 @@ struct UltimaPlayerMenu: View {
     @Default(.VideoPlayer.Playback.rates)
     private var rates: [Float]
 
-    @ObservedObject
-    var player: MediaEnginePlayer
+    /// Held, not observed. `MediaEnginePlayer` republishes on every time update,
+    /// and observing it here rebuilt the menu several times a second — visible
+    /// as a faint flicker while it was open. The menu only ever *calls* the
+    /// player; everything it displays arrives as a value below.
+    let player: MediaEnginePlayer
 
     let audioTracks: [UltimaPlayerView.Track]
     let subtitleTracks: [UltimaPlayerView.Track]
+
+    /// Passed in rather than read off `player`, so this view needs no observation.
+    let isPictureInPictureAvailable: Bool
 
     @Binding
     var currentAudioIndex: Int?
@@ -49,7 +55,7 @@ struct UltimaPlayerMenu: View {
         Menu {
             aspectFillButton
 
-            if player.isPictureInPictureAvailable {
+            if isPictureInPictureAvailable {
                 pictureInPictureButton
             }
 
