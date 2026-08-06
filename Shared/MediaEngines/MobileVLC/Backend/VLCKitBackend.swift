@@ -162,12 +162,15 @@ final class VLCKitBackend: NSObject, MediaEngineSession {
 
     /// The rate the app asked for, which is not always the rate libVLC adopts.
     ///
-    /// VLCKit's setter is a direct passthrough to `libvlc_media_player_set_rate`,
-    /// yet on VLCKit 4 a rate set mid-playback did not stick — it only took
-    /// effect when applied as the media started. libVLC calls this the
+    /// VLCKit's setter is a direct passthrough to `libvlc_media_player_set_rate`
+    /// — the only such call in the whole framework, and `fastForwardAtRate:` is
+    /// just an alias — yet on VLCKit 4 a rate set mid-playback did not stick. It
+    /// took effect only when applied as the media started. libVLC calls this the
     /// *requested* rate and reserves the right to ignore it, so rather than
-    /// guess at the cause we re-assert the request a few times and let the
-    /// engine settle.
+    /// guess at the cause we re-assert the request over the next few ticks.
+    ///
+    /// If this proves insufficient, the next step is instrumentation, not
+    /// another guess: log what libVLC reports after the assignment.
     private var requestedRate: Float = 1
     private var rateReassertionsRemaining = 0
 
@@ -178,14 +181,14 @@ final class VLCKitBackend: NSObject, MediaEngineSession {
     }
 
     /// Called from the time callback, where the player lock is already released.
+    ///
+    /// Re-asserts blindly rather than comparing against `player.rate` first.
+    /// The getter is documented to return the *requested* rate, not the real
+    /// one, so a comparison would report success even when playback ignored the
+    /// request — and would then never retry. Setting the same value again costs
+    /// nothing and does not depend on trusting the read.
     private func reassertRateIfNeeded() {
         guard rateReassertionsRemaining > 0 else { return }
-
-        guard abs(player.rate - requestedRate) > 0.01 else {
-            // It took. Stop watching until the next request.
-            rateReassertionsRemaining = 0
-            return
-        }
 
         rateReassertionsRemaining -= 1
         player.rate = requestedRate
