@@ -50,16 +50,15 @@ final class MediaEnginePlayer: ObservableObject {
         backend = VLCKitBackend(subtitleStyle: subtitleStyle)
 
         backend.onStateChange = { [weak self] newState in
-            guard let self else { return }
-            self.state = newState
-
-            // Availability is polled off state changes rather than observed:
-            // VLCKit hands the controller over without announcing it.
-            self.isPictureInPictureAvailable = self.backend.isPictureInPictureAvailable
+            self?.state = newState
         }
 
         backend.onTimeChange = { [weak self] info in
             self?.playbackInfo = info
+        }
+
+        backend.onPictureInPictureAvailable = { [weak self] in
+            self?.isPictureInPictureAvailable = true
         }
 
         backend.onPictureInPictureChange = { [weak self] isActive in

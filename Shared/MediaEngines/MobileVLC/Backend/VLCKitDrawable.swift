@@ -42,6 +42,15 @@ final class VLCKitDrawable: NSObject {
     /// Called on the main thread when PiP starts or stops.
     var onPictureInPictureChange: ((Bool) -> Void)?
 
+    /// Called on the main thread once VLCKit hands over a PiP controller.
+    ///
+    /// This has to be an event rather than something the UI polls: VLCKit
+    /// offers the controller only after video output is up, which is *after*
+    /// the last playback-state change. Anything that samples availability on a
+    /// state change samples it too early, every time, and the button never
+    /// appears.
+    var onPictureInPictureAvailable: (() -> Void)?
+
     init(player: VLCMediaPlayer) {
         self.player = player
 
@@ -105,6 +114,10 @@ extension VLCKitDrawable: VLCPictureInPictureDrawable {
                 DispatchQueue.main.async {
                     self?.onPictureInPictureChange?(isStarted)
                 }
+            }
+
+            DispatchQueue.main.async {
+                self.onPictureInPictureAvailable?()
             }
         }
     }

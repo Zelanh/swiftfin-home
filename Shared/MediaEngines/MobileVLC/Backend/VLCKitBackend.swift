@@ -106,6 +106,12 @@ final class VLCKitBackend: NSObject, MediaEngineSession {
         set { drawable.onPictureInPictureChange = newValue }
     }
 
+    /// Notified on the main thread once PiP becomes available.
+    var onPictureInPictureAvailable: (() -> Void)? {
+        get { drawable.onPictureInPictureAvailable }
+        set { drawable.onPictureInPictureAvailable = newValue }
+    }
+
     // MARK: MediaEngineSession
 
     func load(_ configuration: MediaEngineConfiguration) {
