@@ -279,9 +279,9 @@ struct UltimaPlayerView: View {
     private var trackMenus: some View {
         UltimaPlayerMenu(
             player: player,
-            isPictureInPictureAvailable: player.isPictureInPictureAvailable,
             audioTracks: audioTracks,
             subtitleTracks: subtitleTracks,
+            isPictureInPictureAvailable: player.isPictureInPictureAvailable,
             currentAudioIndex: $currentAudioIndex,
             currentSubtitleIndex: $currentSubtitleIndex,
             isAspectFill: $isAspectFill,
