@@ -66,6 +66,16 @@ struct UltimaPlayerMenu: View, Equatable {
     @Binding
     var rate: Float
 
+    /// Called when the ellipsis is tapped, i.e. as the menu is about to open.
+    ///
+    /// SwiftUI has no "menu opened" callback, so this rides along on the same
+    /// tap through `simultaneousGesture` — which lets the menu open as usual
+    /// while still telling the overlay to hold still.
+    let onOpen: () -> Void
+
+    /// Called when a menu entry is chosen, which also means the menu closed.
+    let onInteraction: () -> Void
+
     var body: some View {
         Menu {
             aspectFillButton
@@ -88,6 +98,7 @@ struct UltimaPlayerMenu: View, Equatable {
                 .font(.title3)
         }
         .menuOrder(.fixed)
+        .simultaneousGesture(TapGesture().onEnded { onOpen() })
     }
 
     // MARK: Entries
@@ -96,6 +107,7 @@ struct UltimaPlayerMenu: View, Equatable {
         Button {
             isAspectFill.toggle()
             player.setAspectFill(isAspectFill)
+            onInteraction()
         } label: {
             Label(
                 L10n.aspectFill,
@@ -109,6 +121,7 @@ struct UltimaPlayerMenu: View, Equatable {
     private var pictureInPictureButton: some View {
         Button {
             player.startPictureInPicture()
+            onInteraction()
         } label: {
             Label(L10n.pictureInPicture, systemImage: "pip.enter")
         }
@@ -120,6 +133,7 @@ struct UltimaPlayerMenu: View, Equatable {
                 Button {
                     player.selectAudioTrack(at: track.index)
                     currentAudioIndex = track.index
+                    onInteraction()
                 } label: {
                     label(track.title, isSelected: currentAudioIndex == track.index)
                 }
@@ -136,6 +150,7 @@ struct UltimaPlayerMenu: View, Equatable {
             Button {
                 player.selectSubtitleTrack(at: nil)
                 currentSubtitleIndex = nil
+                onInteraction()
             } label: {
                 label(L10n.none, isSelected: currentSubtitleIndex == nil)
             }
@@ -144,6 +159,7 @@ struct UltimaPlayerMenu: View, Equatable {
                 Button {
                     player.selectSubtitleTrack(at: track.index)
                     currentSubtitleIndex = track.index
+                    onInteraction()
                 } label: {
                     label(track.title, isSelected: currentSubtitleIndex == track.index)
                 }
@@ -159,6 +175,7 @@ struct UltimaPlayerMenu: View, Equatable {
                 Button {
                     rate = value
                     player.setRate(value)
+                    onInteraction()
                 } label: {
                     // `.playbackRate` is the same format style the online menu
                     // uses, so both players spell "1.5x" identically.
