@@ -22,7 +22,25 @@ import SwiftUI
 /// meaningless for a file already on disk: there is no server to renegotiate a
 /// bitrate with. Auto play and next/previous need a queue, which offline
 /// playback does not have.
-struct UltimaPlayerMenu: View {
+///
+/// `Equatable` is what keeps the menu still. The player republishes on every
+/// time update, so the view that owns this one is rebuilt about once a second
+/// and rebuilds this menu with it — which iOS renders as a faint fade across an
+/// open menu. Declaring equality lets SwiftUI skip the body entirely when none
+/// of the displayed values actually changed. The player reference and the
+/// closures are deliberately left out of the comparison: they never vary for a
+/// given playback, and comparing them is not possible anyway.
+struct UltimaPlayerMenu: View, Equatable {
+
+    static func == (lhs: Self, rhs: Self) -> Bool {
+        lhs.audioTracks == rhs.audioTracks
+            && lhs.subtitleTracks == rhs.subtitleTracks
+            && lhs.isPictureInPictureAvailable == rhs.isPictureInPictureAvailable
+            && lhs.currentAudioIndex == rhs.currentAudioIndex
+            && lhs.currentSubtitleIndex == rhs.currentSubtitleIndex
+            && lhs.isAspectFill == rhs.isAspectFill
+            && lhs.rate == rhs.rate
+    }
 
     @Default(.VideoPlayer.Playback.rates)
     private var rates: [Float]
@@ -47,9 +65,6 @@ struct UltimaPlayerMenu: View {
     var isAspectFill: Bool
     @Binding
     var rate: Float
-
-    /// Keeps the overlay from auto-hiding while the menu is being used.
-    let onInteraction: () -> Void
 
     var body: some View {
         Menu {
@@ -81,7 +96,6 @@ struct UltimaPlayerMenu: View {
         Button {
             isAspectFill.toggle()
             player.setAspectFill(isAspectFill)
-            onInteraction()
         } label: {
             Label(
                 L10n.aspectFill,
@@ -95,7 +109,6 @@ struct UltimaPlayerMenu: View {
     private var pictureInPictureButton: some View {
         Button {
             player.startPictureInPicture()
-            onInteraction()
         } label: {
             Label(L10n.pictureInPicture, systemImage: "pip.enter")
         }
@@ -107,7 +120,6 @@ struct UltimaPlayerMenu: View {
                 Button {
                     player.selectAudioTrack(at: track.index)
                     currentAudioIndex = track.index
-                    onInteraction()
                 } label: {
                     label(track.title, isSelected: currentAudioIndex == track.index)
                 }
@@ -124,7 +136,6 @@ struct UltimaPlayerMenu: View {
             Button {
                 player.selectSubtitleTrack(at: nil)
                 currentSubtitleIndex = nil
-                onInteraction()
             } label: {
                 label(L10n.none, isSelected: currentSubtitleIndex == nil)
             }
@@ -133,7 +144,6 @@ struct UltimaPlayerMenu: View {
                 Button {
                     player.selectSubtitleTrack(at: track.index)
                     currentSubtitleIndex = track.index
-                    onInteraction()
                 } label: {
                     label(track.title, isSelected: currentSubtitleIndex == track.index)
                 }
@@ -149,7 +159,6 @@ struct UltimaPlayerMenu: View {
                 Button {
                     rate = value
                     player.setRate(value)
-                    onInteraction()
                 } label: {
                     // `.playbackRate` is the same format style the online menu
                     // uses, so both players spell "1.5x" identically.

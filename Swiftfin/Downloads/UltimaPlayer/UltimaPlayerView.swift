@@ -59,8 +59,6 @@ struct UltimaPlayerView: View {
     private var isScrubbing = false
     @State
     private var hasError = false
-    @State
-    private var autoHideTask: Task<Void, Never>?
 
     // [Downloads fork] Audio / subtitle tracks read straight from VLC at runtime
     // (embedded tracks in the file), and the currently-active indexes. VLC's own
@@ -216,7 +214,6 @@ struct UltimaPlayerView: View {
             HStack(spacing: 52) {
                 Button {
                     player.jumpBackward(.seconds(10))
-                    resetAutoHide()
                 } label: {
                     Image(systemName: "gobackward.10")
                         .font(.system(size: 34))
@@ -230,7 +227,6 @@ struct UltimaPlayerView: View {
 
                 Button {
                     player.jumpForward(.seconds(10))
-                    resetAutoHide()
                 } label: {
                     Image(systemName: "goforward.10")
                         .font(.system(size: 34))
@@ -285,9 +281,12 @@ struct UltimaPlayerView: View {
             currentAudioIndex: $currentAudioIndex,
             currentSubtitleIndex: $currentSubtitleIndex,
             isAspectFill: $isAspectFill,
-            rate: $rate,
-            onInteraction: resetAutoHide
+            rate: $rate
         )
+        // Without this the menu is rebuilt on every time update and fades under
+        // the user's finger. `UltimaPlayerMenu` declares equality over the values
+        // it displays, so SwiftUI can skip it when none of them moved.
+        .equatable()
     }
 
     // MARK: Actions
@@ -299,40 +298,26 @@ struct UltimaPlayerView: View {
         } else {
             player.play()
         }
-        resetAutoHide()
     }
 
     private func scrub(_ editing: Bool) {
         isScrubbing = editing
         if !editing {
             player.setSeconds(.seconds(currentSeconds))
-            resetAutoHide()
         }
     }
 
+    /// The overlay is shown and hidden by tapping, never on a timer.
+    ///
+    /// [MobileVLC4 fork] A 3.5s auto-hide used to run here, and it took the
+    /// overflow menu down with it: the menu lives inside the overlay, so hiding
+    /// the overlay dismissed an open menu mid-use. SwiftUI offers no way to ask
+    /// whether a `Menu` is open, so there was nothing to suspend the timer on.
+    /// Tapping is predictable and removes the conflict entirely.
     private func toggleControls() {
         withAnimation(.easeInOut(duration: 0.2)) {
             controlsVisible.toggle()
         }
-        if controlsVisible {
-            scheduleAutoHide()
-        }
-    }
-
-    private func scheduleAutoHide() {
-        autoHideTask?.cancel()
-        autoHideTask = Task { @MainActor in
-            try? await Task.sleep(for: .seconds(3.5))
-            guard !Task.isCancelled else { return }
-            withAnimation(.easeInOut(duration: 0.2)) {
-                controlsVisible = false
-            }
-        }
-    }
-
-    private func resetAutoHide() {
-        guard controlsVisible else { return }
-        scheduleAutoHide()
     }
 
     // MARK: Lifecycle
@@ -341,11 +326,9 @@ struct UltimaPlayerView: View {
         // Play through the silent switch, like any video player.
         try? AVAudioSession.sharedInstance().setCategory(.playback, mode: .moviePlayback)
         try? AVAudioSession.sharedInstance().setActive(true)
-        scheduleAutoHide()
     }
 
     private func deactivate() {
-        autoHideTask?.cancel()
         saveResume()
         player.stop()
         try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
