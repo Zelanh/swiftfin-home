@@ -48,11 +48,19 @@ jobs:
       - name: Install Homebrew dependencies (carthage + tools, via project's Brewfile)
         run: brew bundle --file Brewfile
 
+      # [MobileVLC4 fork] Keyed on the committed manifests, not Cartfile.resolved.
+      #
+      # `Cartfile.resolved` is gitignored, so on a clean checkout it does not
+      # exist and `hashFiles` returned an empty string — making the primary key
+      # identical to the restore-key. A key that always hits exactly is never
+      # written back, so the cache stayed frozen from before the VLCKit 4 move
+      # and the 500 MB framework was re-downloaded from videolan.org on every
+      # single build. That is what turned one of their outages into a red build.
       - name: Cache Carthage builds
         uses: actions/cache@v4
         with:
           path: Carthage
-          key: ${{ runner.os }}-carthage-${{ hashFiles('Cartfile.resolved') }}
+          key: ${{ runner.os }}-carthage-${{ hashFiles('Cartfile', 'VLCKit4.json', 'ChromeCastFramework.json') }}
           restore-keys: |
             ${{ runner.os }}-carthage-
 
