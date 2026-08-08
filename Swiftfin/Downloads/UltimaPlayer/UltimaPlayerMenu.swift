@@ -66,14 +66,13 @@ struct UltimaPlayerMenu: View, Equatable {
     @Binding
     var rate: Float
 
-    /// Called when the ellipsis is tapped, i.e. as the menu is about to open.
-    ///
-    /// SwiftUI has no "menu opened" callback, so this rides along on the same
-    /// tap through `simultaneousGesture` — which lets the menu open as usual
-    /// while still telling the overlay to hold still.
-    let onOpen: () -> Void
-
     /// Called when a menu entry is chosen, which also means the menu closed.
+    ///
+    /// There is deliberately no counterpart for *opening*. One was tried, riding
+    /// on the same tap through `simultaneousGesture`, and it never fired: a
+    /// `Menu` keeps the tap to itself. It made no difference anyway — the overlay
+    /// hiding stopped disturbing the menu once the controls were kept mounted,
+    /// and the resulting behaviour is the one that was wanted.
     let onInteraction: () -> Void
 
     var body: some View {
@@ -98,7 +97,6 @@ struct UltimaPlayerMenu: View, Equatable {
                 .font(.title3)
         }
         .menuOrder(.fixed)
-        .simultaneousGesture(TapGesture().onEnded { onOpen() })
     }
 
     // MARK: Entries

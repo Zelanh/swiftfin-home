@@ -62,17 +62,6 @@ struct UltimaPlayerView: View {
     @State
     private var autoHideTask: Task<Void, Never>?
 
-    /// Whether the overflow menu is open, in which case the overlay holds still.
-    ///
-    /// [MobileVLC4 fork] Set as the ellipsis is tapped and cleared on the next
-    /// interaction. It cannot be observed directly — SwiftUI reports no menu
-    /// lifecycle — so a stale `true` is possible if the menu is dismissed by
-    /// tapping away. That only delays the auto-hide until the next tap, and the
-    /// overlay is no longer torn out of the hierarchy, so an open menu survives
-    /// either way.
-    @State
-    private var isMenuOpen = false
-
     // [Downloads fork] Audio / subtitle tracks read straight from VLC at runtime
     // (embedded tracks in the file), and the currently-active indexes. VLC's own
     // track indexes are what `setAudioTrack`/`setSubtitleTrack` expect, so no
@@ -302,14 +291,7 @@ struct UltimaPlayerView: View {
             currentSubtitleIndex: $currentSubtitleIndex,
             isAspectFill: $isAspectFill,
             rate: $rate,
-            onOpen: {
-                isMenuOpen = true
-                autoHideTask?.cancel()
-            },
-            onInteraction: {
-                isMenuOpen = false
-                resetAutoHide()
-            }
+            onInteraction: resetAutoHide
         )
         // Without this the menu is rebuilt on every time update and fades under
         // the user's finger. `UltimaPlayerMenu` declares equality over the values
@@ -338,8 +320,6 @@ struct UltimaPlayerView: View {
     }
 
     private func toggleControls() {
-        // A tap anywhere also means whatever the menu was doing is over.
-        isMenuOpen = false
         controlsVisible.toggle()
 
         if controlsVisible {
@@ -354,9 +334,8 @@ struct UltimaPlayerView: View {
         autoHideTask = Task { @MainActor in
             try? await Task.sleep(for: .seconds(3.5))
             guard !Task.isCancelled else { return }
-            // Re-checked on expiry rather than only when scheduling: the menu
-            // may have been opened while this was already counting down.
-            guard !isMenuOpen else { return }
+            // Hiding the controls no longer disturbs an open menu: they stay
+            // mounted and merely fade, so the menu keeps its anchor.
             controlsVisible = false
         }
     }
