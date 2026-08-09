@@ -35,8 +35,15 @@ class DownloadManager: ObservableObject {
         }
     }
 
+    // [Downloads fork] Every lookup below matches on `item.id`, never on the item
+    // itself. A `BaseItemDto` carries userData — favourite, played, playback
+    // position — which the server refreshes and playback mutates, so two values
+    // describing the same item routinely compare unequal. `task(for:)` already
+    // worked this way; the three below did not, and that is what left completed
+    // and deleted tasks stranded in `downloads`.
+
     func download(task: DownloadTask) {
-        guard !downloads.contains(where: { $0.item == task.item }) else { return }
+        guard !downloads.contains(where: { $0.item.id == task.item.id }) else { return }
 
         downloads.append(task)
 
@@ -63,15 +70,20 @@ class DownloadManager: ObservableObject {
     }
 
     func cancel(task: DownloadTask) {
-        guard downloads.contains(where: { $0.item == task.item }) else { return }
+        guard downloads.contains(where: { $0.item.id == task.item.id }) else { return }
 
         task.cancel()
 
         remove(task: task)
     }
 
+    /// Drop a task from the in-flight list.
+    ///
+    /// Safe to call with a task parsed from disk rather than the live one — which
+    /// is exactly what deleting a finished download does — because the match is
+    /// by id.
     func remove(task: DownloadTask) {
-        downloads.removeAll(where: { $0.item == task.item })
+        downloads.removeAll(where: { $0.item.id == task.item.id })
     }
 
     // [Downloads fork] Called from `DownloadTask`'s error paths (download failure /
