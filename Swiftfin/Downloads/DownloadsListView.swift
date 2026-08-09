@@ -64,7 +64,7 @@ struct DownloadsListView: View {
                     if activeDownloads.isNotEmpty {
                         Section(L10n.inProgress) {
                             ForEach(activeDownloads) { task in
-                                ActiveDownloadRow(task: task, onFinished: reload)
+                                ActiveDownloadRow(task: task, onFinished: { finished(task) })
                             }
                         }
                     }
@@ -118,6 +118,18 @@ struct DownloadsListView: View {
     private func reload() {
         items = downloadManager.downloadedItems()
         totalBytes = max(0, URL.swiftfinDownloads.sizeOnDisk)
+    }
+
+    /// A download reached a terminal state: retire it and re-read the disk.
+    ///
+    /// [Downloads fork] Retiring it is the part that used to be missing. Nothing
+    /// removed a *successful* download from the manager — only cancelling and
+    /// deleting did — so `downloads` grew by one per download and never shrank.
+    /// Being memory-only, the pile-up survived deleting items and was cleared
+    /// only by force-quitting the app, which is exactly how the symptom behaved.
+    private func finished(_ task: DownloadTask) {
+        downloadManager.remove(task: task)
+        reload()
     }
 
     private func delete(_ task: DownloadTask) {
