@@ -55,8 +55,19 @@ struct CastButtonView: View {
         // Match `GCKUICastButton`'s behaviour: hide when no devices are around.
         .opacity(castManager.hasAvailableDevices || castManager.isSessionActive ? 1 : 0)
         .disabled(!(castManager.hasAvailableDevices || castManager.isSessionActive))
+        // Long press ends a session the app is stuck believing in. Held rather
+        // than tapped so it cannot be hit by accident, and simultaneous so the
+        // normal tap keeps working.
+        .simultaneousGesture(
+            LongPressGesture(minimumDuration: 0.7)
+                .onEnded { _ in
+                    castManager.forceDisconnect()
+                }
+        )
         .onAppear {
             refreshDiscovery()
+            // Covers a cold launch, where the scenePhase change below does not fire.
+            castManager.reconcileSessionState()
         }
         .onChange(of: scenePhase) { newPhase in
             // The classic "Google Home trick" the user reported: opening the
@@ -65,6 +76,9 @@ struct CastButtonView: View {
             // .active transition we make that warming happen automatically.
             if newPhase == .active {
                 refreshDiscovery()
+                // Returning to the app is when a session that died while away
+                // becomes visible as stale, so this is where it gets dropped.
+                castManager.reconcileSessionState()
             }
         }
         // Surface cast-load failures on-device: with a sideloaded build we
