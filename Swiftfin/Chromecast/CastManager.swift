@@ -164,6 +164,9 @@ final class CastManager: NSObject, ObservableObject {
     private func performLoad(baseItem: BaseItemDto, mediaSource: MediaSourceInfo) async {
         guard let remoteMediaClient = currentSession?.remoteMediaClient else {
             lastLoadError = "Cast: no active session when load was attempted"
+            // Proof, not a guess: we were asked to cast and there is no session
+            // to cast to. Whatever the app still believed, it was wrong.
+            reconcileSessionState()
             return
         }
 
@@ -499,6 +502,10 @@ extension CastManager: GCKRequestDelegate {
         DispatchQueue.main.async {
             self.lastLoadError = "Cast load failed: \(error.localizedDescription) (code \(error.code))"
             self.activeLoadRequest = nil
+            // A failure is only a prompt to look — a receiver can refuse a load
+            // and still be perfectly connected. `reconcileSessionState` decides,
+            // and only acts if the SDK agrees the session is gone.
+            self.reconcileSessionState()
         }
     }
 
