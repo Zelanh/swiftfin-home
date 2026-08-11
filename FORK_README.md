@@ -6,8 +6,8 @@
 > that adds two iOS features upstream doesn't ship. The first — **Chromecast
 > support** (Cast button + quality picker) — shipped in v1.5.0. The second —
 > **offline Downloads** (download movies and episodes to watch with no server,
-> a Downloads tab, a "downloaded" badge, and offline playback) — is the newer
-> **v1.6 feature, still being built and stabilised** as of this writing.
+> a Downloads tab, a "downloaded" badge, and offline playback) — shipped in
+> **v1.6.0**.
 >
 > - The fork was **written by a non-developer with heavy AI assistance** (Claude).
 > - It is **not endorsed by, affiliated with, or contributed back to the Jellyfin
@@ -130,9 +130,8 @@ users. Skim these before assuming something is broken:
 ## Fork surface — what changes on the base (per feature)
 
 This fork adds **two iOS features** on top of upstream Swiftfin:
-**Chromecast** (shipped in v1.5.0) and **offline Downloads** (newer, still
-stabilising toward a release). Both follow the same rule, which is the whole
-point of this section:
+**Chromecast** (shipped in v1.5.0) and **offline Downloads** (shipped in
+v1.6.0). Both follow the same rule, which is the whole point of this section:
 
 > As much code as possible lives in **one owned folder per feature**, every
 > touch to a base file is **`#if os(iOS)`-guarded where relevant and tagged
