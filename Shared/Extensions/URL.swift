@@ -31,6 +31,47 @@ extension URL {
 
     static let jellyfinDocsManagingUsers: URL = URL(string: "https://jellyfin.org/docs/general/server/users/adding-managing-users")!
 
+    // [Downloads fork] **Media** root — the actual video files, in the app's
+    // Documents container so each download is browsable/deletable in the Files app
+    // and iPhone Storage. Layout is `<id>/<Title>.<ext>`: iOS flattens folders in
+    // its file list, so the user sees one nicely-named file per download and never
+    // the internals. Excluded from iCloud backup (large, re-downloadable).
+    static var swiftfinDownloads: URL {
+        ensureDownloadsDirectory(
+            FileManager.default
+                .urls(for: .documentDirectory, in: .userDomainMask)[0]
+                .appendingPathComponent("Downloads", isDirectory: true)
+        )
+    }
+
+    // [Downloads fork] **Metadata** root — the "tripas" (Item.json + artwork) per
+    // download, in the app's *private* Application Support container so they're
+    // never shown in Files / Settings. Keeping metadata here (not next to the
+    // media) is what stops a user from deleting Item.json and orphaning a
+    // multi-GB media file.
+    static var swiftfinDownloadsMetadata: URL {
+        ensureDownloadsDirectory(
+            FileManager.default
+                .urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+                .appendingPathComponent("Downloads", isDirectory: true)
+        )
+    }
+
+    // [Downloads fork] Create the directory on first use and exclude it from iCloud backup.
+    private static func ensureDownloadsDirectory(_ directory: URL) -> URL {
+        let fileManager = FileManager.default
+        guard !fileManager.fileExists(atPath: directory.path) else { return directory }
+
+        try? fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
+
+        var mutable = directory
+        var values = URLResourceValues()
+        values.isExcludedFromBackup = true
+        try? mutable.setResourceValues(values)
+
+        return directory
+    }
+
     func isDirectoryAndReachable() throws -> Bool {
         guard try resourceValues(forKeys: [.isDirectoryKey]).isDirectory == true else {
             return false

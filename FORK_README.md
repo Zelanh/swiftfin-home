@@ -3,8 +3,11 @@
 > ⚠️ **READ THIS FIRST**
 >
 > This is a **personal fork** of [Swiftfin](https://github.com/jellyfin/Swiftfin)
-> with one feature added: **Chromecast support for iOS** (Cast button + quality
-> picker).
+> that adds two iOS features upstream doesn't ship. The first — **Chromecast
+> support** (Cast button + quality picker) — shipped in v1.5.0. The second —
+> **offline Downloads** (download movies and episodes to watch with no server,
+> a Downloads tab, a "downloaded" badge, and offline playback) — shipped in
+> **v1.6.0**.
 >
 > - The fork was **written by a non-developer with heavy AI assistance** (Claude).
 > - It is **not endorsed by, affiliated with, or contributed back to the Jellyfin
@@ -124,7 +127,110 @@ users. Skim these before assuming something is broken:
 
 ---
 
-## Technical changes vs. upstream
+## Fork surface — what changes on the base (per feature)
+
+This fork adds **two iOS features** on top of upstream Swiftfin:
+**Chromecast** (shipped in v1.5.0) and **offline Downloads** (shipped in
+v1.6.0). Both follow the same rule, which is the whole point of this section:
+
+> As much code as possible lives in **one owned folder per feature**, every
+> touch to a base file is **`#if os(iOS)`-guarded where relevant and tagged
+> with a `// [<Feature> fork]` comment**, and the *entire* surface is
+> greppable in one command.
+
+This is the minimal-footprint proof and the adoption guide: if you want to
+lift a feature into your own tree (or upstream it), the list below plus one
+`grep` is the complete set of edits.
+
+### Feature 1 — Chromecast (iOS)
+
+Our folder: **`Swiftfin/Chromecast/`** (7 files). Deep dive in
+[Technical changes vs. upstream (Chromecast)](#technical-changes-vs-upstream-chromecast)
+and [Architecture (Chromecast)](#architecture-chromecast) below.
+
+Base files touched (all tagged `// [Chromecast fork]`):
+
+| File | What changed |
+|---|---|
+| `Swiftfin/App/SwiftfinApp.swift` | 1 line — `ChromecastBootstrap.configure()` |
+| `Shared/Objects/…/MediaPlayerItem/MediaPlayerItem+Build.swift` | additive `customDeviceProfile:` param (used only by Cast) |
+| `Shared/Views/ItemView/…/ActionButtonHStack.swift` | mount the item-detail Cast button + warm discovery |
+| `Shared/Views/VideoPlayer/VideoPlayer.swift` | swap VLC ↔ Cast proxy while a session is active |
+| `Shared/Views/VideoPlayer/…/VideoPlayer+Toolbar.swift` | in-player Cast button placement |
+| `Cartfile` | GoogleCast Carthage binary (uncommented) |
+| `Swiftfin.xcodeproj/project.pbxproj` | link + embed `GoogleCast.xcframework` (iOS target) |
+| `.github/workflows/build-ios.yml` | new unsigned-IPA workflow (upstream `ci.yml` left intact) |
+
+Find every base hook:
+
+```
+grep -rn "\[Chromecast fork\]" Shared Swiftfin --include="*.swift"
+```
+
+### Feature 2 — Offline Downloads (iOS)
+
+Download movies/episodes to watch with no server connection, a **"downloaded"
+badge** on posters (visible even when online), a dedicated **Downloads tab**,
+and **offline playback**.
+
+> **Reused where sensible, isolated where necessary.** Upstream already ships an
+> experimental but *orphaned* download **engine** — `DownloadManager`,
+> `DownloadTask`, `DownloadListView`, `DownloadTaskView` — gated behind an unused
+> flag, with no download button, no "downloaded" indicator, and offline playback
+> never wired up. This fork **activates and fixes** that engine rather than
+> writing a new one, so a few of the base files below are that pre-existing
+> engine being corrected, not new subsystems. Offline **playback**, by contrast,
+> runs through the fork's **own** player (`UltimaPlayer/`) instead of the base
+> `MediaPlayerManager`: that base pipeline leaks a player instance per playback
+> (only one item plays per app launch, force-quit needed for the next), and
+> playback depends 100% on it, so isolating downloaded playback both fixes the
+> leak and shields the feature from future upstream player rewrites.
+
+Our folder: **`Swiftfin/Downloads/`**:
+
+| File | Role |
+|---|---|
+| `DownloadsTab.swift` | The 4th iPhone tab (`TabItem.downloads`) |
+| `DownloadsListView.swift` | The tab's list — live-reloads on appear/selection, an "in progress" section with live progress bars, a total-size header, native swipe-to-delete |
+| `DownloadActionButton.swift` | Download button on the item detail (idle / progress / downloaded states), with a storage-capacity pre-check and a Wi-Fi-only guard |
+| `DownloadedIndicator.swift` | The "downloaded" badge overlay drawn on posters |
+| `DownloadStatusStore.swift` | In-memory cache of downloaded IDs so poster cells don't hit disk per render |
+| `DownloadsSettingsSection.swift` | The Downloads section in Settings (incl. the "Download over Wi-Fi only" toggle) |
+| `UltimaPlayer/UltimaPlayerView.swift` | **Self-contained offline player** — drives VLCUI's `VLCVideoPlayer` directly (no base `MediaPlayerManager`), with audio & subtitle track pickers read straight from the file and a local (no-server-sync) resume position. Isolated from the base player, so an upstream player rewrite can't break it, and free of the base pipeline's per-launch playback leak |
+
+Base files touched — the Swift hooks are all tagged `// [Downloads fork]`; the
+localized-strings files are the untagged exception (SwiftGen regenerates
+`Strings.swift` from them):
+
+| File | What changed |
+|---|---|
+| `Shared/Coordinators/Tabs/MainTabView.swift` | 1 line — add `TabItem.downloads` to the iPhone tab list |
+| `Shared/Coordinators/Navigation/NavigationRoute/NavigationRoute+Download.swift` | the `downloadTask` detail route + the `downloadPlayer` route that presents our `UltimaPlayerView` |
+| `Shared/Extensions/URL.swift` | two download roots — `swiftfinDownloads` (media, in **Documents** so each file is visible/deletable in Files & iPhone Storage) and `swiftfinDownloadsMetadata` (the "tripas": `Item.json` + artwork, in **Application Support**, hidden); both excluded from iCloud backup |
+| `Shared/Extensions/JellyfinAPI/BaseItemDto/BaseItemDto.swift` | `downloadFolder` (metadata root), `downloadMediaFolder` (media root) and `downloadMediaBaseName` (filesystem-safe `<Title>` for the media file) |
+| `Shared/Extensions/JellyfinAPI/BaseItemDto/BaseItemDto+Poster.swift` | mount the "downloaded" badge overlay on posters |
+| `Shared/Services/DownloadManager.swift` | scan the metadata root, reconcile against the media on disk (drop + clean up a download whose file the user deleted), one-time migration to the split layout, and `reset()` |
+| `Shared/Services/DownloadTask.swift` | save the media as `<Title>.<ext>` in Documents and the tripas in App Support; `getMediaURL`; delete both halves; rethrow on media-save failure (was silently "completing" with no file on disk) |
+| `Shared/Services/SwiftfinDefaults.swift` | the `downloadOverWifiOnly` setting key |
+| `Shared/Views/ItemView/…/ActionButtonHStack.swift` | mount the download button (movies/episodes only) |
+| `Shared/Views/SettingsView/SettingsView.swift` | mount the Downloads settings section (iOS) |
+| `Shared/Strings/Strings.swift` + `Translations/{en,es,ca}.lproj/Localizable.strings` | new localized strings (`notEnoughStorage`, `downloadOverWifiOnly`, `downloadsTotalSize`) |
+| `Swiftfin/Views/DownloadListView.swift` | fixed-size list-row thumbnails + a per-row on-disk size |
+| `Swiftfin/Views/DownloadTaskView/DownloadTaskContentView.swift` | route the "play" action to the offline `UltimaPlayerView` |
+
+Find every base hook:
+
+```
+grep -rn "\[Downloads fork\]" Shared Swiftfin --include="*.swift"
+```
+
+> `ActionButtonHStack.swift` appears in **both** feature lists — it's the shared
+> item-detail button row. The two mounts (Cast button, Download button) are
+> independent and separately tagged.
+
+---
+
+## Technical changes vs. upstream (Chromecast)
 
 ### Dependencies added
 
@@ -219,7 +325,7 @@ from the upstream `ci.yml` (which is left untouched):
 
 ---
 
-## Architecture
+## Architecture (Chromecast)
 
 ### Cast session lifecycle
 

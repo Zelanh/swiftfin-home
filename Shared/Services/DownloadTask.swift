@@ -105,8 +105,14 @@ class DownloadTask: NSObject, ObservableObject {
     }
 
     func deleteRootFolder() {
-        guard let downloadFolder = item.downloadFolder else { return }
-        try? FileManager.default.removeItem(at: downloadFolder)
+        // [Downloads fork] Remove both halves of the download: the media file in
+        // Documents and the "tripas" (Item.json + artwork) in Application Support.
+        if let mediaFolder = item.downloadMediaFolder {
+            try? FileManager.default.removeItem(at: mediaFolder)
+        }
+        if let downloadFolder = item.downloadFolder {
+            try? FileManager.default.removeItem(at: downloadFolder)
+        }
     }
 
     func encodeMetadata() -> Data {
@@ -116,23 +122,29 @@ class DownloadTask: NSObject, ObservableObject {
     private func downloadMedia() async throws {
 
         guard let userSession else { throw UserSessionError.missingCurrentSession }
-        guard let downloadFolder = item.downloadFolder, let itemID = item.id else { return }
+        // [Downloads fork] Media goes to Documents/<id>/<Title>.<ext> — user-visible
+        // and named — not next to the metadata.
+        guard let mediaFolder = item.downloadMediaFolder, let itemID = item.id else { return }
 
         let request = Paths.getDownload(itemID: itemID)
         let response = try await userSession.client.download(for: request, delegate: self)
 
         let subtype = response.response.mimeSubtype
         let mediaExtension = subtype == nil ? "" : ".\(subtype!)"
+        let mediaFilename = "\(item.downloadMediaBaseName)\(mediaExtension)"
 
         do {
-            try FileManager.default.createDirectory(at: downloadFolder, withIntermediateDirectories: true)
+            try FileManager.default.createDirectory(at: mediaFolder, withIntermediateDirectories: true)
 
             try FileManager.default.moveItem(
                 at: response.value,
-                to: downloadFolder.appendingPathComponent("Media\(mediaExtension)")
+                to: mediaFolder.appendingPathComponent(mediaFilename)
             )
         } catch {
             logger.error("Error downloading media for: \(item.displayTitle) with error: \(error.localizedDescription)")
+            // [Downloads fork] surface the failure instead of silently "completing"
+            // with no media file on disk (was the cause of play/delete doing nothing).
+            throw error
         }
     }
 
@@ -247,16 +259,15 @@ class DownloadTask: NSObject, ObservableObject {
     }
 
     func getMediaURL() -> URL? {
-        do {
-            guard let downloadFolder = item.downloadFolder else { return nil }
-            let contents = try FileManager.default.contentsOfDirectory(atPath: downloadFolder.path)
+        // [Downloads fork] The media is the single title-named file in the Documents
+        // media folder; skip hidden files (e.g. .DS_Store). Returns nil if the user
+        // deleted the media from the Files app / iPhone Storage.
+        guard let mediaFolder = item.downloadMediaFolder,
+              let contents = try? FileManager.default.contentsOfDirectory(atPath: mediaFolder.path),
+              let mediaFilename = contents.first(where: { !$0.hasPrefix(".") })
+        else { return nil }
 
-            guard let mediaFilename = contents.first(where: { $0.starts(with: "Media") }) else { return nil }
-
-            return downloadFolder.appendingPathComponent(mediaFilename)
-        } catch {
-            return nil
-        }
+        return mediaFolder.appendingPathComponent(mediaFilename)
     }
 }
 

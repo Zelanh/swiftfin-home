@@ -91,6 +91,9 @@ extension Defaults.Keys {
 
     static let signOutOnBackground: Key<Bool> = AppKey("signOutOnBackground", default: true)
     static let signOutOnClose: Key<Bool> = AppKey("signOutOnClose", default: false)
+
+    // [Downloads fork] Block downloads on cellular when enabled (see DownloadActionButton).
+    static let downloadOverWifiOnly: Key<Bool> = AppKey("downloadOverWifiOnly", default: false)
 }
 
 // MARK: User

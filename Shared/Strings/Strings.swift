@@ -582,6 +582,10 @@ internal enum L10n {
   internal static let downloadedPlayerWarning = L10n.tr("Localizable", "downloadedPlayerWarning", fallback: "Downloaded items are only playable through the swiftfin video player.")
   /// Downloads
   internal static let downloads = L10n.tr("Localizable", "downloads", fallback: "Downloads")
+  /// Download over Wi-Fi only
+  internal static let downloadOverWifiOnly = L10n.tr("Localizable", "downloadOverWifiOnly", fallback: "Download over Wi-Fi only")
+  /// Total size
+  internal static let downloadsTotalSize = L10n.tr("Localizable", "downloadsTotalSize", fallback: "Total size")
   /// Dropped frames
   internal static let droppedFrames = L10n.tr("Localizable", "droppedFrames", fallback: "Dropped frames")
   /// This saves the URL as another connection for the existing server and makes it active.
@@ -1096,6 +1100,8 @@ internal enum L10n {
   internal static let noPublicUsers = L10n.tr("Localizable", "noPublicUsers", fallback: "No public users")
   /// No results
   internal static let noResults = L10n.tr("Localizable", "noResults", fallback: "No results")
+  /// Not enough storage
+  internal static let notEnoughStorage = L10n.tr("Localizable", "notEnoughStorage", fallback: "Not enough storage")
   /// Normal
   internal static let normal = L10n.tr("Localizable", "normal", fallback: "Normal")
   /// No runtime limit

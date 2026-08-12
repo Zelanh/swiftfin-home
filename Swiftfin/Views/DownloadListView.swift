@@ -34,32 +34,65 @@ extension DownloadListView {
 
         let downloadTask: DownloadTask
 
+        // [Downloads fork] On-disk size of this download, computed once on appear.
+        @State
+        private var sizeText: String?
+
         var body: some View {
             Button {
                 router.route(to: .downloadTask(downloadTask: downloadTask))
             } label: {
-                HStack(alignment: .bottom) {
-                    ImageView(downloadTask.getImageURL(name: "Primary"))
-                        .failure {
-                            Color.secondary
-                                .opacity(0.8)
-                        }
-//                        .posterStyle(type: .portrait, width: 60)
-                        .subtleShadow()
+                HStack(alignment: .center, spacing: 14) {
+                    // [Downloads fork] Small landscape thumbnail at a FIXED size so
+                    // every row's image is identical (some artwork is 16:9, some
+                    // 4:3 or portrait — a width-only frame let them differ in
+                    // height). Fill + clip to 110×62 crops each to the same box.
+                    // Try "Backdrop" first: episodes only save that still, movies
+                    // save both — so every row shows an intelligible image.
+                    ImageView([
+                        downloadTask.getImageURL(name: "Backdrop"),
+                        downloadTask.getImageURL(name: "Primary"),
+                    ])
+                    .failure {
+                        Color.secondary
+                            .opacity(0.8)
+                    }
+                    .aspectRatio(1.77, contentMode: .fill)
+                    .frame(width: 110, height: 62)
+                    .clipped()
+                    .cornerRadius(6)
+                    .subtleShadow()
 
-                    VStack(alignment: .leading) {
+                    VStack(alignment: .leading, spacing: 4) {
                         Text(downloadTask.item.displayTitle)
                             .foregroundColor(.primary)
                             .fontWeight(.semibold)
                             .lineLimit(2)
                             .multilineTextAlignment(.leading)
                             .fixedSize(horizontal: false, vertical: true)
+
+                        // [Downloads fork] On-disk size of the download.
+                        if let sizeText {
+                            Text(sizeText)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
                     }
                     .padding(.vertical)
 
                     Spacer()
                 }
             }
+            .onAppear(perform: computeSize)
+        }
+
+        // [Downloads fork] Compute the on-disk size once, off the render path.
+        private func computeSize() {
+            guard sizeText == nil else { return }
+            // [Downloads fork] Size of the media file (the metadata folder is tiny now).
+            let bytes = downloadTask.item.downloadMediaFolder?.sizeOnDisk ?? -1
+            guard bytes > 0 else { return }
+            sizeText = Int64(bytes).formatted(.byteCount(style: .file))
         }
     }
 }

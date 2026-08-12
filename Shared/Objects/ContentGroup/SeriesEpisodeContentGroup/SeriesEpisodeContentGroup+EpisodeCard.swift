@@ -40,6 +40,20 @@ extension SeriesEpisodeContentGroup {
             }
         }
 
+        /// [Downloads fork] The "downloaded" badge.
+        ///
+        /// Everywhere else it arrives through `BaseItemDto.posterOverlay`, but this
+        /// card does not use it — it builds `overlayView` itself — so an episode
+        /// never showed the badge even when it was on disk. Declared as its own
+        /// builder so the platform check stays out of the modifier chain; on tvOS
+        /// it resolves to nothing.
+        @ViewBuilder
+        private var downloadedBadge: some View {
+            #if os(iOS)
+            DownloadedBadgeOverlay(item: episode)
+            #endif
+        }
+
         private var episodeContent: String {
             if episode.isUnaired {
                 episode.airDateLabel ?? L10n.noOverviewAvailable
@@ -79,6 +93,9 @@ extension SeriesEpisodeContentGroup {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .overlay(alignment: .bottom) {
                     overlayView
+                }
+                .overlay {
+                    downloadedBadge
                 }
                 .contentShape(.contextMenuPreview, Rectangle())
                 .posterStyle(.landscape)

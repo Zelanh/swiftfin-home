@@ -146,6 +146,17 @@ extension ItemView {
                 }
                 #endif
 
+                // MARK: Download [Downloads fork]
+                //
+                // Only for single downloadable items (movie / episode). Reuses
+                // upstream's DownloadManager; button lives in Swiftfin/Downloads/.
+
+                #if os(iOS)
+                if provider.item.type == .movie || provider.item.type == .episode {
+                    DownloadActionButton(provider: provider)
+                }
+                #endif
+
                 // MARK: Trailer
 
                 if hasTrailers {

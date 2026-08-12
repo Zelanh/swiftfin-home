@@ -93,6 +93,12 @@ extension BaseItemDto: Poster {
                 item: self,
                 posterDisplayType: displayType
             )
+
+            #if os(iOS)
+            // [Downloads fork] "Downloaded" badge (top-leading); reads the
+            // in-memory DownloadStatusStore. See Swiftfin/Downloads/.
+            DownloadedBadgeOverlay(item: self)
+            #endif
         }
     }
 

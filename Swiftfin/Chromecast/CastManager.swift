@@ -164,6 +164,9 @@ final class CastManager: NSObject, ObservableObject {
     private func performLoad(baseItem: BaseItemDto, mediaSource: MediaSourceInfo) async {
         guard let remoteMediaClient = currentSession?.remoteMediaClient else {
             lastLoadError = "Cast: no active session when load was attempted"
+            // Proof, not a guess: we were asked to cast and there is no session
+            // to cast to. Whatever the app still believed, it was wrong.
+            reconcileSessionState()
             return
         }
 
@@ -325,6 +328,51 @@ final class CastManager: NSObject, ObservableObject {
         GCKCastContext.sharedInstance().sessionManager.endSessionAndStopCasting(true)
     }
 
+    /// Drop a session the app still believes in but that no longer exists.
+    ///
+    /// `didSuspend` deliberately leaves `isSessionActive` alone, because a
+    /// suspension is normally transient and resumes on foreground — see the
+    /// listener for why treating it as an ending caused re-casting on every
+    /// unlock. The gap is a suspension that never resumes: walk out of the
+    /// network with a cast running and `didEnd` never fires, so the flag stays
+    /// true with nothing behind it. The app then still routes playback to a
+    /// receiver that is not there ("Channel is not connected", code 12) and
+    /// offers no way out, because the SDK's own stop button needs a session.
+    ///
+    /// Deliberately conservative: a session that merely *reports* not-connected
+    /// may be mid-reconnect, and clearing that would resurrect the re-cast bug.
+    /// Only a session the SDK no longer has, or one it calls disconnected, is
+    /// treated as gone.
+    func reconcileSessionState() {
+        let isGone = currentSession == nil || currentSession?.connectionState == .disconnected
+        guard isSessionActive, isGone else { return }
+
+        clearSessionState()
+    }
+
+    /// The user's escape hatch: end whatever the SDK has and clear our state
+    /// regardless of what it reports.
+    ///
+    /// ``reconcileSessionState()`` handles the cases where the SDK admits the
+    /// session is gone. This covers the ones where it does not — a socket stuck
+    /// mid-reconnect to a network that is no longer there has no reliable
+    /// signature to detect, and the user should not be stranded either way.
+    func forceDisconnect() {
+        endSession()
+        clearSessionState()
+    }
+
+    private func clearSessionState() {
+        jellyfinChannel = nil
+        isSessionActive = false
+        connectedDeviceName = nil
+        castPlayerState = .idle
+        // Same reasoning as `didEnd`: leave nothing behind that could override
+        // the next cast attempt.
+        pendingBitrate = nil
+        pendingAudioStreamIndex = nil
+    }
+
     // MARK: - Private Helpers
 
     private var currentSession: GCKCastSession? {
@@ -454,6 +502,10 @@ extension CastManager: GCKRequestDelegate {
         DispatchQueue.main.async {
             self.lastLoadError = "Cast load failed: \(error.localizedDescription) (code \(error.code))"
             self.activeLoadRequest = nil
+            // A failure is only a prompt to look — a receiver can refuse a load
+            // and still be perfectly connected. `reconcileSessionState` decides,
+            // and only acts if the SDK agrees the session is gone.
+            self.reconcileSessionState()
         }
     }
 

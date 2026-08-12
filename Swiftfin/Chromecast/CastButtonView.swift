@@ -55,6 +55,19 @@ struct CastButtonView: View {
         // Match `GCKUICastButton`'s behaviour: hide when no devices are around.
         .opacity(castManager.hasAvailableDevices || castManager.isSessionActive ? 1 : 0)
         .disabled(!(castManager.hasAvailableDevices || castManager.isSessionActive))
+        // Hold for a way out of a session the app is stuck believing in. A menu
+        // rather than an immediate action: the same shape the downloads list
+        // uses, so it asks before doing something destructive instead of firing
+        // on a gesture the user may not have meant.
+        .contextMenu {
+            if castManager.isSessionActive {
+                Button(role: .destructive) {
+                    castManager.forceDisconnect()
+                } label: {
+                    Label(L10n.stop, systemImage: "tv.slash")
+                }
+            }
+        }
         .onAppear {
             refreshDiscovery()
         }

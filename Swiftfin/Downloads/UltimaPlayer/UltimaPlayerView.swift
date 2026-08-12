@@ -1,0 +1,385 @@
+//
+// Swiftfin is subject to the terms of the Mozilla Public
+// License, v2.0. If a copy of the MPL was not distributed with this
+// file, you can obtain one at https://mozilla.org/MPL/2.0/.
+//
+// Copyright (c) 2026 Jellyfin & Jellyfin Contributors
+//
+
+import AVFoundation
+import SwiftUI
+import VLCUI
+
+/// [Downloads fork] Self-contained offline player for downloaded items.
+///
+/// Part of the isolated Downloads integration (Swiftfin/Downloads/UltimaPlayer/).
+/// It drives VLCUI's `VLCVideoPlayer` **directly** — none of the base
+/// `MediaPlayerManager` / observer / session-scoped-singleton pipeline — so
+/// downloaded playback is:
+///
+///   1. **Isolated** from the base player, and therefore unaffected by future
+///      core rewrites of it (this feature can't be silently broken by an
+///      upstream player refactor).
+///   2. **Leak-free**: the base pipeline leaks a player instance per playback
+///      (only one plays per app launch, a force-quit is needed for the next —
+///      see its own `// TODO: fix leaks`). Owning a fresh `VLCVideoPlayer.Proxy`
+///      per presentation and tearing it down on disappear avoids that entirely.
+///   3. **Network-free**: no playback reports, no server negotiation — it just
+///      opens the local file. No sidecar subtitle "children" pointing at the
+///      server either, so none of the offline all-black hangs.
+///
+/// It takes only `Sendable` primitives (a local `URL` + display strings), never a
+/// `DownloadTask`, so there's nothing to reach back into.
+struct UltimaPlayerView: View {
+
+    @Router
+    private var router
+
+    /// Local media file (`DownloadTask.getMediaURL()`).
+    let url: URL
+    /// Display title for the top bar.
+    let title: String
+    /// Total runtime in seconds (from `Item.json`), `0` if unknown — drives the
+    /// scrubber and bounds the local resume point.
+    let runtimeSeconds: Double
+    /// Item id, used only as the **local** resume-position key (no server sync).
+    /// `nil` disables resume.
+    let itemID: String?
+
+    @StateObject
+    private var proxy: VLCVideoPlayer.Proxy = .init()
+
+    @State
+    private var currentSeconds: Double = 0
+    @State
+    private var isPlaying = true
+    @State
+    private var controlsVisible = true
+    @State
+    private var isScrubbing = false
+    @State
+    private var hasError = false
+    @State
+    private var autoHideTask: Task<Void, Never>?
+
+    // [Downloads fork] Audio / subtitle tracks read straight from VLC at runtime
+    // (embedded tracks in the file), and the currently-active indexes. VLC's own
+    // track indexes are what `setAudioTrack`/`setSubtitleTrack` expect, so no
+    // mapping is needed.
+    @State
+    private var audioTracks: [Track] = []
+    @State
+    private var subtitleTracks: [Track] = []
+    @State
+    private var currentAudioIndex: Int?
+    @State
+    private var currentSubtitleIndex: Int?
+
+    struct Track: Identifiable {
+        let index: Int
+        let title: String
+        var id: Int { index }
+    }
+
+    private var configuration: VLCVideoPlayer.Configuration {
+        var configuration = VLCVideoPlayer.Configuration(url: url)
+        configuration.autoPlay = true
+        if let resume = resumeSeconds {
+            configuration.startSeconds = .seconds(resume)
+        }
+        return configuration
+    }
+
+    /// Locally-saved resume point, if any and if sensible (not near the very
+    /// start or end). `ResumeStore` reads UserDefaults, which we only write on
+    /// dismiss, so this stays constant across body re-evaluations.
+    private var resumeSeconds: Double? {
+        guard let itemID, runtimeSeconds > 0,
+              let saved = ResumeStore.seconds(for: itemID),
+              saved > 5, saved < runtimeSeconds - 15
+        else { return nil }
+        return saved
+    }
+
+    var body: some View {
+        ZStack {
+            Color.black
+                .ignoresSafeArea()
+
+            VLCVideoPlayer(configuration: configuration)
+                .proxy(proxy)
+                .onSecondsUpdated { newSeconds, _ in
+                    guard !isScrubbing else { return }
+                    let seconds = Double(newSeconds.components.seconds)
+                    // Keep within the slider's range (metadata runtime can be a
+                    // touch shorter than the real file).
+                    currentSeconds = runtimeSeconds > 0 ? min(seconds, runtimeSeconds) : seconds
+                }
+                .onStateUpdated { state, info in
+                    switch state {
+                    case .playing, .esAdded:
+                        if state == .playing { isPlaying = true }
+                        // Read the file's embedded tracks straight from VLC.
+                        audioTracks = info.audioTracks.map { Track(index: $0.index, title: $0.title) }
+                        subtitleTracks = info.subtitleTracks.map { Track(index: $0.index, title: $0.title) }
+                        currentAudioIndex = info.currentAudioTrack.index
+                        currentSubtitleIndex = info.currentSubtitleTrack.index
+                    case .paused:
+                        isPlaying = false
+                    case .ended:
+                        router.dismiss()
+                    case .error:
+                        hasError = true
+                    default:
+                        break
+                    }
+                }
+                .ignoresSafeArea()
+
+            // Tap anywhere (behind the controls) to toggle the overlay.
+            Color.clear
+                .contentShape(Rectangle())
+                .onTapGesture(perform: toggleControls)
+
+            if controlsVisible {
+                controls
+                    .transition(.opacity)
+            }
+        }
+        .preferredColorScheme(.dark)
+        .statusBarHidden()
+        .persistentSystemOverlays(.hidden)
+        .onAppear(perform: activate)
+        .onDisappear(perform: deactivate)
+        .alert(L10n.error, isPresented: $hasError) {
+            Button(L10n.dismiss) { router.dismiss() }
+        } message: {
+            Text(L10n.unableToLoadThisItem)
+        }
+    }
+
+    // MARK: Controls
+
+    @ViewBuilder
+    private var controls: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 16) {
+                Button {
+                    router.dismiss()
+                } label: {
+                    Image(systemName: "xmark")
+                        .font(.title2.weight(.semibold))
+                }
+
+                Text(title)
+                    .font(.headline)
+                    .lineLimit(1)
+
+                Spacer()
+
+                trackMenus
+            }
+            .padding()
+
+            Spacer()
+
+            HStack(spacing: 52) {
+                Button {
+                    proxy.jumpBackward(.seconds(10))
+                    resetAutoHide()
+                } label: {
+                    Image(systemName: "gobackward.10")
+                        .font(.system(size: 34))
+                }
+
+                Button(action: togglePlayPause) {
+                    Image(systemName: isPlaying ? "pause.fill" : "play.fill")
+                        .font(.system(size: 52))
+                        .frame(width: 64)
+                }
+
+                Button {
+                    proxy.jumpForward(.seconds(10))
+                    resetAutoHide()
+                } label: {
+                    Image(systemName: "goforward.10")
+                        .font(.system(size: 34))
+                }
+            }
+
+            Spacer()
+
+            if runtimeSeconds > 0 {
+                HStack(spacing: 12) {
+                    Text(Duration.seconds(currentSeconds), format: .runtime)
+                        .monospacedDigit()
+
+                    Slider(
+                        value: $currentSeconds,
+                        in: 0 ... runtimeSeconds,
+                        onEditingChanged: scrub
+                    )
+
+                    Text(Duration.seconds(runtimeSeconds), format: .runtime)
+                        .monospacedDigit()
+                }
+                .font(.caption)
+                .padding()
+            }
+        }
+        .foregroundStyle(.white)
+        .background(
+            LinearGradient(
+                colors: [.black.opacity(0.55), .clear, .black.opacity(0.55)],
+                startPoint: .top,
+                endPoint: .bottom
+            )
+            .ignoresSafeArea()
+            .allowsHitTesting(false)
+        )
+    }
+
+    /// Audio / subtitle pickers. Only shown when there's an actual choice: audio
+    /// when the file has more than one track; subtitles when it has at least one
+    /// real subtitle (VLC also lists a "Disable" entry to turn them off).
+    @ViewBuilder
+    private var trackMenus: some View {
+        if audioTracks.count > 1 {
+            Menu {
+                ForEach(audioTracks) { track in
+                    Button {
+                        proxy.setAudioTrack(.absolute(track.index))
+                        currentAudioIndex = track.index
+                        resetAutoHide()
+                    } label: {
+                        trackLabel(track.title, selected: currentAudioIndex == track.index)
+                    }
+                }
+            } label: {
+                Image(systemName: "waveform")
+                    .font(.title3)
+            }
+        }
+
+        if subtitleTracks.contains(where: { $0.index >= 0 }) {
+            Menu {
+                ForEach(subtitleTracks) { track in
+                    Button {
+                        proxy.setSubtitleTrack(.absolute(track.index))
+                        currentSubtitleIndex = track.index
+                        resetAutoHide()
+                    } label: {
+                        trackLabel(track.title, selected: currentSubtitleIndex == track.index)
+                    }
+                }
+            } label: {
+                Image(systemName: "captions.bubble")
+                    .font(.title3)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func trackLabel(_ title: String, selected: Bool) -> some View {
+        if selected {
+            Label(title, systemImage: "checkmark")
+        } else {
+            Text(title)
+        }
+    }
+
+    // MARK: Actions
+
+    private func togglePlayPause() {
+        // The state callback flips `isPlaying`; we drive the proxy here.
+        if isPlaying {
+            proxy.pause()
+        } else {
+            proxy.play()
+        }
+        resetAutoHide()
+    }
+
+    private func scrub(_ editing: Bool) {
+        isScrubbing = editing
+        if !editing {
+            proxy.setSeconds(.seconds(currentSeconds))
+            resetAutoHide()
+        }
+    }
+
+    private func toggleControls() {
+        withAnimation(.easeInOut(duration: 0.2)) {
+            controlsVisible.toggle()
+        }
+        if controlsVisible {
+            scheduleAutoHide()
+        }
+    }
+
+    private func scheduleAutoHide() {
+        autoHideTask?.cancel()
+        autoHideTask = Task { @MainActor in
+            try? await Task.sleep(for: .seconds(3.5))
+            guard !Task.isCancelled else { return }
+            withAnimation(.easeInOut(duration: 0.2)) {
+                controlsVisible = false
+            }
+        }
+    }
+
+    private func resetAutoHide() {
+        guard controlsVisible else { return }
+        scheduleAutoHide()
+    }
+
+    // MARK: Lifecycle
+
+    private func activate() {
+        // Play through the silent switch, like any video player.
+        try? AVAudioSession.sharedInstance().setCategory(.playback, mode: .moviePlayback)
+        try? AVAudioSession.sharedInstance().setActive(true)
+        scheduleAutoHide()
+    }
+
+    private func deactivate() {
+        autoHideTask?.cancel()
+        saveResume()
+        proxy.stop()
+        try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+    }
+
+    /// Persist (or clear) the local resume point for this item. Cleared when
+    /// finished or barely started so we don't resume at the very end / start.
+    private func saveResume() {
+        guard let itemID else { return }
+        if currentSeconds > 5, runtimeSeconds > 0, currentSeconds < runtimeSeconds - 15 {
+            ResumeStore.set(currentSeconds, for: itemID)
+        } else {
+            ResumeStore.set(nil, for: itemID)
+        }
+    }
+}
+
+// MARK: - Local resume store
+
+/// [Downloads fork] Local-only resume positions (seconds) keyed by item id, in
+/// `UserDefaults`. No server sync — downloads are for offline use.
+private enum ResumeStore {
+
+    private static let key = "UltimaPlayerResumeSeconds"
+
+    static func seconds(for id: String) -> Double? {
+        (UserDefaults.standard.dictionary(forKey: key) as? [String: Double])?[id]
+    }
+
+    static func set(_ seconds: Double?, for id: String) {
+        var store = (UserDefaults.standard.dictionary(forKey: key) as? [String: Double]) ?? [:]
+        if let seconds {
+            store[id] = seconds
+        } else {
+            store.removeValue(forKey: id)
+        }
+        UserDefaults.standard.set(store, forKey: key)
+    }
+}

@@ -39,6 +39,9 @@ struct SettingsView: View {
         Form(image: .jellyfinBlobBlue) {
             serverSection
             videoPlayerSection
+            #if os(iOS)
+            downloadsSection // [Downloads fork]
+            #endif
             customizeSection
             diagnosticsSection
         }
@@ -49,6 +52,19 @@ struct SettingsView: View {
         }
         #endif
     }
+
+    #if os(iOS)
+    // MARK: - Downloads Section [Downloads fork]
+    //
+    // Entry point to the offline downloads list plus downloads settings. The
+    // section body lives in our own `DownloadsSettingsSection` (Swiftfin/Downloads/)
+    // so the downloads-specific state stays out of the base SettingsView.
+
+    @ViewBuilder
+    private var downloadsSection: some View {
+        DownloadsSettingsSection()
+    }
+    #endif
 
     // MARK: - Server Section
 
