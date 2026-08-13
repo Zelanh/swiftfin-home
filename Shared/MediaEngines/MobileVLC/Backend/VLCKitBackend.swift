@@ -53,6 +53,13 @@ final class VLCKitBackend: NSObject, MediaEngineSession {
         player = VLCMediaPlayer(options: Self.engineOptions(for: subtitleStyle))
         super.init()
         player.delegate = self
+
+        A2LeakProbe.born("VLCKitBackend", self)
+    }
+
+    // [A2 diagnostic] TEMPORARY — see the probe at the bottom of VLCKitDrawable.
+    deinit {
+        A2LeakProbe.died("VLCKitBackend", self)
     }
 
     private static func engineOptions(for style: MediaEngineSubtitleStyle?) -> [String] {
