@@ -64,13 +64,6 @@ final class MediaEnginePlayer: ObservableObject {
         backend.onPictureInPictureChange = { [weak self] isActive in
             self?.isPictureInPictureActive = isActive
         }
-
-        A2LeakProbe.born("MediaEnginePlayer", self)
-    }
-
-    // [A2 diagnostic] TEMPORARY — see the probe at the bottom of VLCKitDrawable.
-    deinit {
-        A2LeakProbe.died("MediaEnginePlayer", self)
     }
 
     // MARK: Video surface

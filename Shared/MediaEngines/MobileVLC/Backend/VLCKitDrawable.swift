@@ -7,7 +7,6 @@
 //
 
 import Foundation
-import Logging
 import UIKit
 import VLCKit
 
@@ -83,12 +82,6 @@ final class VLCKitDrawable: NSObject {
         view.autoresizingMask = [.flexibleWidth, .flexibleHeight]
 
         super.init()
-
-        A2LeakProbe.born("VLCKitDrawable", self)
-    }
-
-    deinit {
-        A2LeakProbe.died("VLCKitDrawable", self)
     }
 
     // The four below are the readers the confinement above exists for. All are
@@ -204,40 +197,5 @@ extension VLCKitDrawable: VLCPictureInPictureMediaControlling {
 
     func isMediaPlaying() -> Bool {
         player?.isPlaying ?? false
-    }
-}
-
-// MARK: - A2 leak probe
-
-// [A2 diagnostic] TEMPORARY — delete this block and its six call sites once the
-// question is answered. See Analisis20260807.md, finding A2.
-//
-// The engine layer has no `deinit` anywhere, which is exactly why a suspected
-// retain cycle through Picture in Picture has stayed a suspicion. `mediaController()`
-// hands `self` to VLCKit, and this type holds the controller VLCKit hands back;
-// if VLCKit keeps the media controller strongly, that is a cycle and neither
-// object ever dies.
-//
-// Recording birth and death of the three long-lived objects turns the question
-// into something countable: play three videos, then read the log. Three births
-// and three deaths per type means no leak. Fewer deaths than births names the
-// leaking type precisely, which reasoning about the ownership graph cannot.
-//
-// `.notice` because nothing else in the app logs at that level — filtering the
-// in-app console by it shows this and nothing else.
-enum A2LeakProbe {
-
-    static func born(_ type: String, _ object: AnyObject) {
-        Logger.swiftfin().notice("A2 · BORN \(type) #\(tag(object))")
-    }
-
-    static func died(_ type: String, _ object: AnyObject) {
-        Logger.swiftfin().notice("A2 · DIED \(type) #\(tag(object))")
-    }
-
-    /// Last six hex digits of the address: enough to pair a death with its
-    /// birth, short enough to read on a phone.
-    private static func tag(_ object: AnyObject) -> String {
-        String(String(UInt(bitPattern: ObjectIdentifier(object)), radix: 16).suffix(6))
     }
 }

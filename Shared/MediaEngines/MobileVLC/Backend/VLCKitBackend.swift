@@ -7,6 +7,7 @@
 //
 
 import Foundation
+import Logging
 import UIKit
 import VLCKit
 
@@ -40,6 +41,26 @@ final class VLCKitBackend: NSObject, MediaEngineSession {
     /// becomes a terminal event, or the app would try to advance twice.
     private var didEmitTerminalState = false
 
+    /// Whether a freshly loaded medium has yet to report that it started.
+    ///
+    /// `load()` clears the two flags above so the new medium begins from a clean
+    /// slate — but libVLC delivers the *previous* medium's `Stopping`
+    /// asynchronously, so it can land after that reset and be read as the new
+    /// medium ending on its own. Downstream that is `manager.ended()`, which
+    /// advances the queue: an episode silently skipped.
+    ///
+    /// A terminal state arriving before the new medium has reported opening
+    /// cannot belong to it, so it is dropped. Note what this deliberately is
+    /// not: a generation counter carried by the event. The delegate callbacks
+    /// capture nothing — they only hop to the main actor — so by the time one
+    /// runs, any counter it could read already holds the new value.
+    ///
+    /// The guard can only ever suppress. If libVLC were to deliver the new
+    /// medium's `Opening` before the old one's `Stopping`, it simply does
+    /// nothing, which is today's behaviour — so it cannot make matters worse
+    /// than not having it.
+    private var isAwaitingNewMedia = false
+
     /// Track selection and resume position can only be applied once the engine
     /// has actually opened the media and published its track list.
     private var pendingConfiguration: MediaEngineConfiguration?
@@ -53,13 +74,6 @@ final class VLCKitBackend: NSObject, MediaEngineSession {
         player = VLCMediaPlayer(options: Self.engineOptions(for: subtitleStyle))
         super.init()
         player.delegate = self
-
-        A2LeakProbe.born("VLCKitBackend", self)
-    }
-
-    // [A2 diagnostic] TEMPORARY — see the probe at the bottom of VLCKitDrawable.
-    deinit {
-        A2LeakProbe.died("VLCKitBackend", self)
     }
 
     private static func engineOptions(for style: MediaEngineSubtitleStyle?) -> [String] {
@@ -124,6 +138,7 @@ final class VLCKitBackend: NSObject, MediaEngineSession {
     func load(_ configuration: MediaEngineConfiguration) {
         didRequestStop = false
         didEmitTerminalState = false
+        isAwaitingNewMedia = true
         pendingConfiguration = configuration
 
         guard let media = VLCMedia(url: configuration.url) else {
@@ -160,6 +175,12 @@ final class VLCKitBackend: NSObject, MediaEngineSession {
 
     func stop() {
         didRequestStop = true
+
+        // An explicit stop is unambiguous, even if the medium never got as far
+        // as reporting that it opened. Without this, stopping during a load
+        // would leave the guard swallowing the very stop that was asked for.
+        isAwaitingNewMedia = false
+
         player.stop()
     }
 
@@ -358,8 +379,12 @@ extension VLCKitBackend: VLCMediaPlayerDelegate {
     private func handle(_ newState: VLCMediaPlayerState) {
         switch newState {
         case .opening:
+            isAwaitingNewMedia = false
             onStateChange?(.opening)
         case .playing:
+            // Belt and braces alongside `.opening`: if that were ever skipped,
+            // playback running is proof enough that the new medium is live.
+            isAwaitingNewMedia = false
             applyPendingConfiguration()
             onStateChange?(.playing)
             // PiP renders its own transport controls from our media-controlling
@@ -373,6 +398,18 @@ extension VLCKitBackend: VLCMediaPlayerDelegate {
             onStateChange?(.error)
         case .stopping,
              .stopped:
+            // The medium we just loaded has not started yet, so this ending
+            // belongs to the one it replaced. Reporting it would advance the
+            // queue a second time and skip an episode. See `isAwaitingNewMedia`.
+            guard !isAwaitingNewMedia else {
+                // [A3 probe] TEMPORARY — the window this guard closes was found
+                // by reading, never observed. Remove once we know whether it
+                // fires in practice; if it never does, the guard stays anyway,
+                // because it costs nothing and the reasoning still holds.
+                Logger.swiftfin().notice("A3 · dropped a terminal state from the previous medium")
+                return
+            }
+
             // Both arrive for one ending; report the first and ignore the rest.
             guard !didEmitTerminalState else { return }
             didEmitTerminalState = true
