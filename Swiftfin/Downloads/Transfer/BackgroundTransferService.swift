@@ -84,8 +84,19 @@ final class BackgroundTransferService: NSObject {
         return URLSession(configuration: configuration, delegate: self, delegateQueue: .main)
     }()
 
+    /// The queue is passed in, and has no default value.
+    ///
+    /// It began as `init(queue: TransferQueue = TransferQueue())`, which does not
+    /// compile. A default argument expression is evaluated at the call site in a
+    /// nonisolated context and does *not* inherit the isolation of the initializer
+    /// it belongs to, however that initializer is annotated — so the main-actor
+    /// `TransferQueue()` is unreachable from there.
+    ///
+    /// The caller builds it instead. That works because a stored property's
+    /// initial value *is* evaluated in the isolation of its enclosing type, and
+    /// the only caller is a `@MainActor` app delegate.
     @MainActor
-    init(queue: TransferQueue = TransferQueue()) {
+    init(queue: TransferQueue) {
         self.queue = queue
         super.init()
 

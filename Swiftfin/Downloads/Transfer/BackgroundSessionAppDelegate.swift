@@ -31,7 +31,7 @@ final class BackgroundSessionAppDelegate: NSObject, UIApplicationDelegate {
     /// sidesteps constructing it from somewhere that is not. It is published into
     /// the container below, so everything else still reaches it the same way it
     /// reaches the rest of the app's services.
-    private let transferService = BackgroundTransferService()
+    private let transferService = BackgroundTransferService(queue: TransferQueue())
 
     func application(
         _ application: UIApplication,
