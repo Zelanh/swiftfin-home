@@ -8,7 +8,6 @@
 
 import AVFoundation
 import SwiftUI
-import VLCUI
 
 /// [Downloads fork] Self-contained offline player for downloaded items.
 ///
@@ -46,8 +45,9 @@ struct UltimaPlayerView: View {
     /// `nil` disables resume.
     let itemID: String?
 
+    // [MobileVLC4 fork] Was VLCUI's Proxy; now the fork's own engine facade.
     @StateObject
-    private var proxy: VLCVideoPlayer.Proxy = .init()
+    private var player: MediaEnginePlayer = .init()
 
     @State
     private var currentSeconds: Double = 0
@@ -75,14 +75,27 @@ struct UltimaPlayerView: View {
     @State
     private var currentSubtitleIndex: Int?
 
-    struct Track: Identifiable {
+    // [MobileVLC4 fork] Presentation options the overflow menu drives. Local
+    // state rather than Defaults: these are per-playback choices, and the
+    // offline player deliberately keeps no session of its own.
+    @State
+    private var isAspectFill = false
+    @State
+    private var rate: Float = 1
+
+    // [MobileVLC4 fork] `Equatable` is load-bearing, not decoration: without it
+    // `[Track]` is not comparable either, so SwiftUI cannot tell that a state
+    // assignment changed nothing. The track lists are rebuilt on every time
+    // update — several times a second — and that rebuilt the open menu each
+    // time, which read as a faint heartbeat flicker.
+    struct Track: Identifiable, Equatable {
         let index: Int
         let title: String
         var id: Int { index }
     }
 
-    private var configuration: VLCVideoPlayer.Configuration {
-        var configuration = VLCVideoPlayer.Configuration(url: url)
+    private var configuration: MediaEngineConfiguration {
+        var configuration = MediaEngineConfiguration(url: url)
         configuration.autoPlay = true
         if let resume = resumeSeconds {
             configuration.startSeconds = .seconds(resume)
@@ -106,24 +119,41 @@ struct UltimaPlayerView: View {
             Color.black
                 .ignoresSafeArea()
 
-            VLCVideoPlayer(configuration: configuration)
-                .proxy(proxy)
-                .onSecondsUpdated { newSeconds, _ in
-                    guard !isScrubbing else { return }
-                    let seconds = Double(newSeconds.components.seconds)
-                    // Keep within the slider's range (metadata runtime can be a
-                    // touch shorter than the real file).
-                    currentSeconds = runtimeSeconds > 0 ? min(seconds, runtimeSeconds) : seconds
+            player.videoView
+                .onAppear {
+                    player.load(configuration)
                 }
-                .onStateUpdated { state, info in
+                .backport
+                .onChange(of: player.playbackInfo) { _, info in
+                    if !isScrubbing {
+                        let seconds = Double(info.seconds.components.seconds)
+                        // Keep within the slider's range (metadata runtime can be
+                        // a touch shorter than the real file).
+                        currentSeconds = runtimeSeconds > 0 ? min(seconds, runtimeSeconds) : seconds
+                    }
+
+                    // Embedded tracks, read straight from the engine. Assigned
+                    // only when they actually differ: this closure runs on every
+                    // time update, and a redundant write would rebuild the menu
+                    // under the user's finger.
+                    let newAudioTracks = info.audioTracks.map { Track(index: $0.index, title: $0.title ?? "") }
+                    if newAudioTracks != audioTracks {
+                        audioTracks = newAudioTracks
+                    }
+
+                    let newSubtitleTracks = info.subtitleTracks.map { Track(index: $0.index, title: $0.title ?? "") }
+                    if newSubtitleTracks != subtitleTracks {
+                        subtitleTracks = newSubtitleTracks
+                    }
+
+                    currentAudioIndex = info.audioTracks.first(where: \.isSelected)?.index
+                    currentSubtitleIndex = info.subtitleTracks.first(where: \.isSelected)?.index
+                }
+                .backport
+                .onChange(of: player.state) { _, state in
                     switch state {
-                    case .playing, .esAdded:
-                        if state == .playing { isPlaying = true }
-                        // Read the file's embedded tracks straight from VLC.
-                        audioTracks = info.audioTracks.map { Track(index: $0.index, title: $0.title) }
-                        subtitleTracks = info.subtitleTracks.map { Track(index: $0.index, title: $0.title) }
-                        currentAudioIndex = info.currentAudioTrack.index
-                        currentSubtitleIndex = info.currentSubtitleTrack.index
+                    case .playing:
+                        isPlaying = true
                     case .paused:
                         isPlaying = false
                     case .ended:
@@ -141,10 +171,15 @@ struct UltimaPlayerView: View {
                 .contentShape(Rectangle())
                 .onTapGesture(perform: toggleControls)
 
-            if controlsVisible {
-                controls
-                    .transition(.opacity)
-            }
+            // [MobileVLC4 fork] Faded rather than removed. An open `Menu` is
+            // anchored to the ellipsis inside these controls, so taking them out
+            // of the hierarchy — which `if controlsVisible { }` did — made iOS
+            // dismiss the menu the moment the overlay auto-hid. Swiftfin's own
+            // player keeps its controls mounted for the same reason.
+            controls
+                .opacity(controlsVisible ? 1 : 0)
+                .animation(.easeInOut(duration: 0.2), value: controlsVisible)
+                .allowsHitTesting(controlsVisible)
         }
         .preferredColorScheme(.dark)
         .statusBarHidden()
@@ -185,7 +220,7 @@ struct UltimaPlayerView: View {
 
             HStack(spacing: 52) {
                 Button {
-                    proxy.jumpBackward(.seconds(10))
+                    player.jumpBackward(.seconds(10))
                     resetAutoHide()
                 } label: {
                     Image(systemName: "gobackward.10")
@@ -199,7 +234,7 @@ struct UltimaPlayerView: View {
                 }
 
                 Button {
-                    proxy.jumpForward(.seconds(10))
+                    player.jumpForward(.seconds(10))
                     resetAutoHide()
                 } label: {
                     Image(systemName: "goforward.10")
@@ -243,49 +278,25 @@ struct UltimaPlayerView: View {
     /// when the file has more than one track; subtitles when it has at least one
     /// real subtitle (VLC also lists a "Disable" entry to turn them off).
     @ViewBuilder
+    // [MobileVLC4 fork] Was two separate icons for audio and subtitles; now one
+    // overflow menu matching the online player, which also gives speed, aspect
+    // fill and Picture in Picture somewhere to live.
     private var trackMenus: some View {
-        if audioTracks.count > 1 {
-            Menu {
-                ForEach(audioTracks) { track in
-                    Button {
-                        proxy.setAudioTrack(.absolute(track.index))
-                        currentAudioIndex = track.index
-                        resetAutoHide()
-                    } label: {
-                        trackLabel(track.title, selected: currentAudioIndex == track.index)
-                    }
-                }
-            } label: {
-                Image(systemName: "waveform")
-                    .font(.title3)
-            }
-        }
-
-        if subtitleTracks.contains(where: { $0.index >= 0 }) {
-            Menu {
-                ForEach(subtitleTracks) { track in
-                    Button {
-                        proxy.setSubtitleTrack(.absolute(track.index))
-                        currentSubtitleIndex = track.index
-                        resetAutoHide()
-                    } label: {
-                        trackLabel(track.title, selected: currentSubtitleIndex == track.index)
-                    }
-                }
-            } label: {
-                Image(systemName: "captions.bubble")
-                    .font(.title3)
-            }
-        }
-    }
-
-    @ViewBuilder
-    private func trackLabel(_ title: String, selected: Bool) -> some View {
-        if selected {
-            Label(title, systemImage: "checkmark")
-        } else {
-            Text(title)
-        }
+        UltimaPlayerMenu(
+            player: player,
+            audioTracks: audioTracks,
+            subtitleTracks: subtitleTracks,
+            isPictureInPictureAvailable: player.isPictureInPictureAvailable,
+            currentAudioIndex: $currentAudioIndex,
+            currentSubtitleIndex: $currentSubtitleIndex,
+            isAspectFill: $isAspectFill,
+            rate: $rate,
+            onInteraction: resetAutoHide
+        )
+        // Without this the menu is rebuilt on every time update and fades under
+        // the user's finger. `UltimaPlayerMenu` declares equality over the values
+        // it displays, so SwiftUI can skip it when none of them moved.
+        .equatable()
     }
 
     // MARK: Actions
@@ -293,9 +304,9 @@ struct UltimaPlayerView: View {
     private func togglePlayPause() {
         // The state callback flips `isPlaying`; we drive the proxy here.
         if isPlaying {
-            proxy.pause()
+            player.pause()
         } else {
-            proxy.play()
+            player.play()
         }
         resetAutoHide()
     }
@@ -303,17 +314,18 @@ struct UltimaPlayerView: View {
     private func scrub(_ editing: Bool) {
         isScrubbing = editing
         if !editing {
-            proxy.setSeconds(.seconds(currentSeconds))
+            player.setSeconds(.seconds(currentSeconds))
             resetAutoHide()
         }
     }
 
     private func toggleControls() {
-        withAnimation(.easeInOut(duration: 0.2)) {
-            controlsVisible.toggle()
-        }
+        controlsVisible.toggle()
+
         if controlsVisible {
             scheduleAutoHide()
+        } else {
+            autoHideTask?.cancel()
         }
     }
 
@@ -322,9 +334,9 @@ struct UltimaPlayerView: View {
         autoHideTask = Task { @MainActor in
             try? await Task.sleep(for: .seconds(3.5))
             guard !Task.isCancelled else { return }
-            withAnimation(.easeInOut(duration: 0.2)) {
-                controlsVisible = false
-            }
+            // Hiding the controls no longer disturbs an open menu: they stay
+            // mounted and merely fade, so the menu keeps its anchor.
+            controlsVisible = false
         }
     }
 
@@ -345,7 +357,7 @@ struct UltimaPlayerView: View {
     private func deactivate() {
         autoHideTask?.cancel()
         saveResume()
-        proxy.stop()
+        player.stop()
         try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
     }
 

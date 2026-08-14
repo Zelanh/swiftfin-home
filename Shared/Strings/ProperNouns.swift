@@ -12,6 +12,12 @@ import Foundation
 /// These live on `L10n` so every display string flows through a single namespace
 extension L10n {
 
+    // MARK: - Apple features
+
+    // [MobileVLC4 fork] Apple ships this feature under one name in every
+    // locale, so it belongs here rather than in the translated catalogue.
+    static let pictureInPicture = "Picture in Picture"
+
     // MARK: - Licenses
 
     static let mlp2 = "MLP 2.0"
