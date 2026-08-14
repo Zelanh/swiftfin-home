@@ -3,11 +3,18 @@
 > ⚠️ **READ THIS FIRST**
 >
 > This is a **personal fork** of [Swiftfin](https://github.com/jellyfin/Swiftfin)
-> that adds two iOS features upstream doesn't ship. The first — **Chromecast
+> that adds three iOS features upstream doesn't ship. The first — **Chromecast
 > support** (Cast button + quality picker) — shipped in v1.5.0. The second —
 > **offline Downloads** (download movies and episodes to watch with no server,
 > a Downloads tab, a "downloaded" badge, and offline playback) — shipped in
-> **v1.6.0**.
+> **v1.6.0**. The third — **Picture in Picture**, by moving the video engine to
+> **VLCKit 4** — ships in **2.0.0-alpha.22**.
+>
+> **About that version suffix.** `-alpha.22` names **VLCKit 4.0.0a22**, the video
+> backend, which VideoLAN still labels alpha. It does not mean the app is
+> unfinished: everything else here is the code that shipped in v1.6.0. The suffix
+> tracks the engine and moves with it, and the day VLCKit 4 is stable it simply
+> disappears. Apple's version field carries the numeric part only.
 >
 > - The fork was **written by a non-developer with heavy AI assistance** (Claude).
 > - It is **not endorsed by, affiliated with, or contributed back to the Jellyfin
@@ -129,13 +136,12 @@ users. Skim these before assuming something is broken:
 
 ## Fork surface — what changes on the base (per feature)
 
-This fork adds **two iOS features** on top of upstream Swiftfin:
-**Chromecast** (shipped in v1.5.0) and **offline Downloads** (shipped in
-v1.6.0). A third change — migrating the **video engine to VLCKit 4** to gain
-Picture in Picture — is not merged and is documented separately in
-[Branch `experiment/vlckit4`](#branch-experimentvlckit4--vlckit-4-alpha-22-media-engine).
-Both features follow the same rule, which is the whole
-point of this section:
+This fork adds **three iOS features** on top of upstream Swiftfin:
+**Chromecast** (shipped in v1.5.0), **offline Downloads** (shipped in v1.6.0),
+and the **VLCKit 4 media engine** that brings Picture in Picture (shipped in
+2.0.0-alpha.22, documented in
+[VLCKit 4 media engine](#vlckit-4-alpha-22-media-engine)).
+All three follow the same rule, which is the whole point of this section:
 
 > As much code as possible lives in **one owned folder per feature**, every
 > touch to a base file is **`#if os(iOS)`-guarded where relevant and tagged
@@ -234,11 +240,12 @@ grep -rn "\[Downloads fork\]" Shared Swiftfin --include="*.swift"
 
 ---
 
-## Branch `experiment/vlckit4` — VLCKit 4 (alpha 22) media engine
+## VLCKit 4 (alpha 22) media engine
 
-> **Status: not merged.** Lives on `experiment/vlckit4`, branched from
-> `feature/offline-downloads`. Builds green and plays; documented here so the
-> surface is known if it ever goes upstream.
+> **Status: shipped in 2.0.0-alpha.22.** Developed on `experiment/vlckit4`,
+> branched from `feature/offline-downloads`, merged to `main`. The `-alpha.22`
+> in the version names **VLCKit's** alpha, not the state of this code — see the
+> note at the top.
 
 ### What it does
 
