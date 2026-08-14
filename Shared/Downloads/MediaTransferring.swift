@@ -26,6 +26,13 @@ import Foundation
 /// Deliberately says nothing about Jellyfin. A request is a URL, some headers
 /// and a destination; the caller is what knows about items and servers. That
 /// keeps this file a seam rather than a second copy of the download logic.
+///
+/// `@MainActor` because everything here is bookkeeping that the interface reads:
+/// a queue somebody is watching a progress bar for. The implementation still has
+/// to serve `URLSession` callbacks on whatever thread the session uses, but that
+/// is its own problem to solve behind this line, and it is where the hard part
+/// lives — not here.
+@MainActor
 protocol MediaTransferring: AnyObject {
 
     /// Every transfer the layer knows about, keyed by item id, republished on
