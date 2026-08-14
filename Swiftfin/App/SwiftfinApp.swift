@@ -13,6 +13,12 @@ import UIKit
 @main
 struct SwiftfinApp: App {
 
+    // [Downloads fork] Swiftfin uses the pure SwiftUI lifecycle, but a background
+    // URLSession reports its results through the app delegate and nowhere else.
+    // Everything it does lives in Swiftfin/Downloads/Transfer.
+    @UIApplicationDelegateAdaptor(BackgroundSessionAppDelegate.self)
+    private var backgroundSessionDelegate
+
     init() {
         Self.configure()
 

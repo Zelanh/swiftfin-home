@@ -7,9 +7,24 @@
 //
 
 import Combine
+import FactoryKit
 import Foundation
 
 // [Downloads fork]
+
+extension Container {
+
+    /// Whatever moves media bytes on this platform, or `nil` where nothing does.
+    ///
+    /// Optional, and defaulting to nothing, is what lets a single code path serve
+    /// both platforms without a `#if`. iOS registers a real implementation at
+    /// launch; tvOS registers none and the caller keeps its existing foreground
+    /// behaviour. The day Apple TV wants downloads, it registers one too — and
+    /// nothing else changes.
+    var mediaTransferring: Factory<(any MediaTransferring)?> {
+        self { nil }.shared
+    }
+}
 
 /// What a download needs from whatever actually moves the bytes.
 ///
