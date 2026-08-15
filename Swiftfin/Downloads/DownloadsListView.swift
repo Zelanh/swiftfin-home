@@ -91,6 +91,7 @@ struct DownloadsListView: View {
                     }
                 }
                 .listStyle(.plain)
+                .refreshable { refreshRequested() }
             }
         }
         .navigationTitle(L10n.downloads)
@@ -118,6 +119,19 @@ struct DownloadsListView: View {
     private func reload() {
         items = downloadManager.downloadedItems()
         totalBytes = max(0, URL.swiftfinDownloads.sizeOnDisk)
+    }
+
+    /// Pull-to-refresh: re-read the disk, and take the chance to clean up.
+    ///
+    /// [Downloads fork] The only place that deletes abandoned metadata. Listing
+    /// used to do it silently on every appear, which meant a background transfer
+    /// in progress could have its metadata swept out from under it. Tying it to a
+    /// deliberate gesture keeps the destructive half where the user can see it —
+    /// and leaves `reload()` free to run as often as it likes.
+    private func refreshRequested() {
+        downloadManager.sweepAbandonedDownloads()
+        reload()
+        statusStore.refresh()
     }
 
     /// A download reached a terminal state: retire it and re-read the disk.

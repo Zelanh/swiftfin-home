@@ -61,10 +61,12 @@ class DownloadManager: ObservableObject {
         // present — not just the metadata (the user can delete media from Files).
         guard let id = item.id, let task = parseDownloadItem(with: id) else { return nil }
 
-        guard task.getMediaURL() != nil else {
-            task.deleteRootFolder() // stale metadata with no media → clean up
-            return nil
-        }
+        // [Downloads fork] Not downloaded *yet* is not the same as abandoned, and
+        // this cannot tell them apart: the in-memory check above only covers the
+        // current run, so after a relaunch mid-transfer the metadata is all there
+        // is to go on. Deleting here removed exactly the downloads that background
+        // transfers exist to rescue. Cleanup lives in `sweepAbandonedDownloads`.
+        guard task.getMediaURL() != nil else { return nil }
 
         return task
     }
@@ -115,24 +117,41 @@ class DownloadManager: ObservableObject {
             return []
         }
 
-        // [Downloads fork] "No media file" no longer means "abandoned". Metadata is
-        // now written before the media is fetched, and a background transfer can
-        // take minutes, so between those two points a perfectly healthy download
-        // looks exactly like a deleted one. Deleting it here destroyed the very
-        // `Item.json` the finished transfer needed to become visible.
-        let pendingTransfers = Container.shared.mediaTransferring()?.pendingTransferIDs ?? []
-
+        // [Downloads fork] A download with no media file is not listed — but it is
+        // no longer deleted here either. This method is a read, and a read that
+        // deletes is what cost a round of downloads: metadata is now written before
+        // the media is fetched, so for the minutes a background transfer takes, a
+        // healthy download is indistinguishable from an abandoned one.
+        //
+        // Filtering is enough to keep such an entry out of the list. Removing it
+        // from disk is a separate, deliberate act — see `sweepAbandonedDownloads`.
         return ids.compactMap { id in
             guard let task = parseDownloadItem(with: id) else { return nil }
-            guard task.getMediaURL() != nil else {
-                // Still garbage-collect genuinely abandoned metadata — media
-                // deleted from Files or iPhone Storage, with nothing on its way.
-                if !pendingTransfers.contains(id) {
-                    task.deleteRootFolder()
-                }
-                return nil
-            }
+            guard task.getMediaURL() != nil else { return nil }
             return task
+        }
+    }
+
+    /// Delete the metadata of downloads whose media file is gone for good.
+    ///
+    /// [Downloads fork] The cleanup half of what `downloadedItems()` used to do in
+    /// one breath. Split out because the two have genuinely different risk: listing
+    /// happens constantly and must be harmless, while deleting is destructive and
+    /// should happen when the user asks for it — currently pull-to-refresh.
+    ///
+    /// "Gone for good" means the media is missing *and* no transfer is on its way.
+    /// The pending set is read from the durable queue, so a transfer that outlived
+    /// the process still protects its metadata.
+    func sweepAbandonedDownloads() {
+        guard let ids = try? FileManager.default.contentsOfDirectory(atPath: URL.swiftfinDownloadsMetadata.path) else {
+            return
+        }
+
+        let pendingTransfers = Container.shared.mediaTransferring()?.pendingTransferIDs ?? []
+
+        for id in ids where !pendingTransfers.contains(id) {
+            guard let task = parseDownloadItem(with: id), task.getMediaURL() == nil else { continue }
+            task.deleteRootFolder()
         }
     }
 
