@@ -183,10 +183,21 @@ Download movies/episodes to watch with no server connection, a dedicated
 **Downloads tab**, and **offline playback**.
 
 **Since v2.1.0**, downloads run as **background transfers**: they keep going with
-the app suspended or force-quit, and survive the phone moving between Wi-Fi,
-cellular and no coverage at all — the system's transfer daemon owns the
+the app suspended or in the background, and survive the phone moving between
+Wi-Fi, cellular and no coverage at all — the system's transfer daemon owns the
 connection, not the app. In v1.6.0 through v2.0.0 a download only progressed
 while the app was open and in the foreground.
+
+Two limits are worth stating exactly, because the difference is easy to get
+wrong:
+
+- If **the system** terminates the app — memory pressure, usually — the transfer
+  carries on and iOS relaunches the app to deliver the result. This is the case
+  the durable queue and `reattach()` exist for.
+- If **the user** force-quits from the app switcher, iOS cancels the app's
+  background transfers and will not relaunch it. No app can opt out of that. On
+  the next launch `reattach()` finds a record with no matching system task and
+  starts it again — **from the beginning**, since no resume data is kept.
 
 Posters say **how much** of something is held, not just whether it is: a green
 tick for a film or episode, and — **also since v2.1.0** — a yellow count, "3/10",

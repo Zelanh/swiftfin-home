@@ -15,9 +15,14 @@ import UIKit
 ///
 /// Swiftfin uses the pure SwiftUI lifecycle and had no `UIApplicationDelegate` at
 /// all. Background transfers need one anyway: when a download finishes with the
-/// app suspended — or killed — iOS relaunches it and calls
+/// app suspended — or terminated by the system under memory pressure — iOS
+/// relaunches it and calls
 /// `application(_:handleEventsForBackgroundURLSession:completionHandler:)`, and
 /// that message has no SwiftUI equivalent.
+///
+/// Note the distinction, which is easy to get backwards: the system terminating
+/// the app is the case this handles. A *user* force-quitting from the app
+/// switcher cancels the transfers outright and no relaunch happens at all.
 ///
 /// Everything it does is delegated to ``BackgroundTransferService``. It is kept
 /// in this folder rather than next to `SwiftfinApp` so the base file's entire
