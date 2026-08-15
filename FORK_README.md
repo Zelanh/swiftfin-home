@@ -182,13 +182,16 @@ grep -rn "\[Chromecast fork\]" Shared Swiftfin --include="*.swift"
 Download movies/episodes to watch with no server connection, a dedicated
 **Downloads tab**, and **offline playback**.
 
-Downloads run as **background transfers**: they keep going with the app suspended
-or force-quit, and survive the phone moving between Wi-Fi, cellular and no
-coverage at all — the system's transfer daemon owns the connection, not the app.
+**Since v2.1.0**, downloads run as **background transfers**: they keep going with
+the app suspended or force-quit, and survive the phone moving between Wi-Fi,
+cellular and no coverage at all — the system's transfer daemon owns the
+connection, not the app. In v1.6.0 through v2.0.0 a download only progressed
+while the app was open and in the foreground.
 
 Posters say **how much** of something is held, not just whether it is: a green
-tick for a film or episode, and a yellow count — "3/10" — on a season or series
-that is only partly downloaded, turning green when it is complete.
+tick for a film or episode, and — **also since v2.1.0** — a yellow count, "3/10",
+on a season or series that is only partly downloaded, turning green when it is
+complete. Before that, a poster showed a plain "downloaded" badge or nothing.
 
 > **Reused where sensible, isolated where necessary.** Upstream already ships an
 > experimental but *orphaned* download **engine** — `DownloadManager`,
