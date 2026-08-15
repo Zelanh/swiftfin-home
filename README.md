@@ -1,4 +1,4 @@
-> 🔱 **This is an unofficial fork of Swiftfin for the iOS app.** It adds two things upstream doesn't ship: **Chromecast support** (released in v1.5.0) and **offline Downloads** — the v1.6 feature currently being built.
+> 🔱 **This is an unofficial fork of Swiftfin for the iOS app.** It adds three things upstream doesn't ship: **Chromecast support** (released in v1.5.0), **offline Downloads** — the v1.6 feature, which downloads in the background and keeps going with the app closed — and a **VLCKit 4 media engine** (alpha) that replaces VLCUI.
 > See **[FORK_README.md](./FORK_README.md)** for what this fork changes, why, and the important disclaimers (AI-assisted, personal use, not affiliated with Jellyfin).
 > The rest of this README below is the **original upstream Swiftfin README**, kept intact for attribution and reference.
 >
