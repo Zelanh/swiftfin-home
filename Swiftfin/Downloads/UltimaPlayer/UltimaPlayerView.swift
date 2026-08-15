@@ -12,7 +12,7 @@ import SwiftUI
 /// [Downloads fork] Self-contained offline player for downloaded items.
 ///
 /// Part of the isolated Downloads integration (Swiftfin/Downloads/UltimaPlayer/).
-/// It drives VLCUI's `VLCVideoPlayer` **directly** — none of the base
+/// It drives the fork's own `MediaEnginePlayer` **directly** — none of the base
 /// `MediaPlayerManager` / observer / session-scoped-singleton pipeline — so
 /// downloaded playback is:
 ///
@@ -21,7 +21,7 @@ import SwiftUI
 ///      upstream player refactor).
 ///   2. **Leak-free**: the base pipeline leaks a player instance per playback
 ///      (only one plays per app launch, a force-quit is needed for the next —
-///      see its own `// TODO: fix leaks`). Owning a fresh `VLCVideoPlayer.Proxy`
+///      see its own `// TODO: fix leaks`). Owning a fresh `MediaEnginePlayer`
 ///      per presentation and tearing it down on disappear avoids that entirely.
 ///   3. **Network-free**: no playback reports, no server negotiation — it just
 ///      opens the local file. No sidecar subtitle "children" pointing at the

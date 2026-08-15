@@ -227,7 +227,7 @@ Our folder: **`Swiftfin/Downloads/`**:
 | `DownloadedIndicator.swift` | The poster badge in its three states — nothing, a yellow "3/10" capsule, or the green tick |
 | `DownloadStatusStore.swift` | In-memory cache so poster cells don't hit disk per render: the downloaded ids, plus per-season and per-series counts. Also the join that decides a badge's state |
 | `DownloadsSettingsSection.swift` | The Downloads section in Settings (incl. the "Download over Wi-Fi only" toggle) |
-| `UltimaPlayer/UltimaPlayerView.swift` | **Self-contained offline player** — drives VLCUI's `VLCVideoPlayer` directly (no base `MediaPlayerManager`), with audio & subtitle track pickers read straight from the file and a local (no-server-sync) resume position. Isolated from the base player, so an upstream player rewrite can't break it, and free of the base pipeline's per-launch playback leak |
+| `UltimaPlayer/UltimaPlayerView.swift` | **Self-contained offline player** — drives the fork's own `MediaEnginePlayer` directly (no base `MediaPlayerManager`), with audio & subtitle track pickers read straight from the file and a local (no-server-sync) resume position. Isolated from the base player, so an upstream player rewrite can't break it, and free of the base pipeline's per-launch playback leak. Was VLCUI's `VLCVideoPlayer` until v2.0.0 removed VLCUI from the project entirely |
 
 **`Swiftfin/Downloads/Transfer/`** — the background transfer layer. Isolated
 because it is the part that has to keep working in a process that no longer
