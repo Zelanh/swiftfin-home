@@ -179,9 +179,30 @@ grep -rn "\[Chromecast fork\]" Shared Swiftfin --include="*.swift"
 
 ### Feature 2 — Offline Downloads (iOS)
 
-Download movies/episodes to watch with no server connection, a **"downloaded"
-badge** on posters (visible even when online), a dedicated **Downloads tab**,
-and **offline playback**.
+Download movies/episodes to watch with no server connection, a dedicated
+**Downloads tab**, and **offline playback**.
+
+**Since v2.1.0**, downloads run as **background transfers**: they keep going with
+the app suspended or in the background, and survive the phone moving between
+Wi-Fi, cellular and no coverage at all — the system's transfer daemon owns the
+connection, not the app. In v1.6.0 through v2.0.0 a download only progressed
+while the app was open and in the foreground.
+
+Two limits are worth stating exactly, because the difference is easy to get
+wrong:
+
+- If **the system** terminates the app — memory pressure, usually — the transfer
+  carries on and iOS relaunches the app to deliver the result. This is the case
+  the durable queue and `reattach()` exist for.
+- If **the user** force-quits from the app switcher, iOS cancels the app's
+  background transfers and will not relaunch it. No app can opt out of that. On
+  the next launch `reattach()` finds a record with no matching system task and
+  starts it again — **from the beginning**, since no resume data is kept.
+
+Posters say **how much** of something is held, not just whether it is: a green
+tick for a film or episode, and — **also since v2.1.0** — a yellow count, "3/10",
+on a season or series that is only partly downloaded, turning green when it is
+complete. Before that, a poster showed a plain "downloaded" badge or nothing.
 
 > **Reused where sensible, isolated where necessary.** Upstream already ships an
 > experimental but *orphaned* download **engine** — `DownloadManager`,
@@ -203,10 +224,30 @@ Our folder: **`Swiftfin/Downloads/`**:
 | `DownloadsTab.swift` | The 4th iPhone tab (`TabItem.downloads`) |
 | `DownloadsListView.swift` | The tab's list — live-reloads on appear/selection, an "in progress" section with live progress bars, a total-size header, native swipe-to-delete |
 | `DownloadActionButton.swift` | Download button on the item detail (idle / progress / downloaded states), with a storage-capacity pre-check and a Wi-Fi-only guard |
-| `DownloadedIndicator.swift` | The "downloaded" badge overlay drawn on posters |
-| `DownloadStatusStore.swift` | In-memory cache of downloaded IDs so poster cells don't hit disk per render |
+| `DownloadedIndicator.swift` | The poster badge in its three states — nothing, a yellow "3/10" capsule, or the green tick |
+| `DownloadStatusStore.swift` | In-memory cache so poster cells don't hit disk per render: the downloaded ids, plus per-season and per-series counts. Also the join that decides a badge's state |
 | `DownloadsSettingsSection.swift` | The Downloads section in Settings (incl. the "Download over Wi-Fi only" toggle) |
 | `UltimaPlayer/UltimaPlayerView.swift` | **Self-contained offline player** — drives VLCUI's `VLCVideoPlayer` directly (no base `MediaPlayerManager`), with audio & subtitle track pickers read straight from the file and a local (no-server-sync) resume position. Isolated from the base player, so an upstream player rewrite can't break it, and free of the base pipeline's per-launch playback leak |
+
+**`Swiftfin/Downloads/Transfer/`** — the background transfer layer. Isolated
+because it is the part that has to keep working in a process that no longer
+remembers asking:
+
+| File | Role |
+|---|---|
+| `BackgroundTransferService.swift` | Owns the background `URLSession` and its delegate. The session identifier must never change — it is how the system hands back transfers started by a previous life of the app |
+| `TransferQueue.swift` | The in-memory queue and its state machine, the one writer of the durable record |
+| `TransferStore.swift` | The queue on disk: a write-ahead log, not an inventory. Written on transitions only, never on progress |
+| `TransferRecord.swift` | One item's request and state, versioned because the file outlives app versions |
+| `BackgroundSessionAppDelegate.swift` | Exists for one reason: `handleEventsForBackgroundURLSession` has no SwiftUI equivalent, and Swiftfin ships no app delegate of its own |
+
+**`Shared/Downloads/`** — the only part that has to be visible to the tvOS
+target, so it holds the contract and nothing else:
+
+| File | Role |
+|---|---|
+| `MediaTransferring.swift` | The protocol, its request/state types, and the container registration. Optional by design: iOS registers an implementation, tvOS registers none and keeps the foreground path — which is why this feature needs no `#if os(iOS)` anywhere |
+| `DownloadTask+MediaTransfer.swift` | The bridge: builds the request, authenticates it, and mirrors the transfer's state onto `DownloadTask` |
 
 Base files touched — the Swift hooks are all tagged `// [Downloads fork]`; the
 localized-strings files are the untagged exception (SwiftGen regenerates
@@ -218,13 +259,16 @@ localized-strings files are the untagged exception (SwiftGen regenerates
 | `Shared/Coordinators/Navigation/NavigationRoute/NavigationRoute+Download.swift` | the `downloadTask` detail route + the `downloadPlayer` route that presents our `UltimaPlayerView` |
 | `Shared/Extensions/URL.swift` | two download roots — `swiftfinDownloads` (media, in **Documents** so each file is visible/deletable in Files & iPhone Storage) and `swiftfinDownloadsMetadata` (the "tripas": `Item.json` + artwork, in **Application Support**, hidden); both excluded from iCloud backup |
 | `Shared/Extensions/JellyfinAPI/BaseItemDto/BaseItemDto.swift` | `downloadFolder` (metadata root), `downloadMediaFolder` (media root) and `downloadMediaBaseName` (filesystem-safe `<Title>` for the media file) |
-| `Shared/Extensions/JellyfinAPI/BaseItemDto/BaseItemDto+Poster.swift` | mount the "downloaded" badge overlay on posters |
-| `Shared/Services/DownloadManager.swift` | scan the metadata root, reconcile against the media on disk (drop + clean up a download whose file the user deleted), one-time migration to the split layout, and `reset()` |
-| `Shared/Services/DownloadTask.swift` | save the media as `<Title>.<ext>` in Documents and the tripas in App Support; `getMediaURL`; delete both halves; rethrow on media-save failure (was silently "completing" with no file on disk) |
+| `Shared/Extensions/JellyfinAPI/BaseItemDto/BaseItemDto+Poster.swift` | mount the badge overlay on posters |
+| `Shared/Extensions/JellyfinAPI/ItemFields.swift` | request `childCount` and `recursiveItemCount` — the denominator of the season/series badge, which Jellyfin only fills in when asked |
+| `Shared/Objects/ContentGroup/…/SeriesEpisodeContentGroup+EpisodeCard.swift` | mount the badge on the episode card, which builds its own overlay instead of going through `posterOverlay` |
+| `Shared/Services/DownloadManager.swift` | scan the metadata root, one-time migration to the split layout, `reset()`, and `sweepAbandonedDownloads()`. **Listing is a pure read**: it filters out a download whose media is missing but never deletes it, because with metadata written before the media arrives, a healthy in-flight download is indistinguishable from an abandoned one |
+| `Shared/Services/DownloadTask.swift` | save the media as `<Title>.<ext>` in Documents and the tripas in App Support; `getMediaURL`; delete both halves; hand the media to the transfer layer when one is registered. **Metadata is written first**, so a transfer finishing in a dead process still leaves something interpretable on disk |
 | `Shared/Services/SwiftfinDefaults.swift` | the `downloadOverWifiOnly` setting key |
 | `Shared/Views/ItemView/…/ActionButtonHStack.swift` | mount the download button (movies/episodes only) |
 | `Shared/Views/SettingsView/SettingsView.swift` | mount the Downloads settings section (iOS) |
 | `Shared/Strings/Strings.swift` + `Translations/{en,es,ca}.lproj/Localizable.strings` | new localized strings (`notEnoughStorage`, `downloadOverWifiOnly`, `downloadsTotalSize`) |
+| `Swiftfin/App/SwiftfinApp.swift` | 1 line — install the app delegate that receives background-session events (also carries the Chromecast hook) |
 | `Swiftfin/Views/DownloadListView.swift` | fixed-size list-row thumbnails + a per-row on-disk size |
 | `Swiftfin/Views/DownloadTaskView/DownloadTaskContentView.swift` | route the "play" action to the offline `UltimaPlayerView` |
 

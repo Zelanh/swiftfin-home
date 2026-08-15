@@ -1,4 +1,5 @@
-> 🔱 **This is an unofficial fork of Swiftfin for the iOS app.** It adds two things upstream doesn't ship: **Chromecast support** (released in v1.5.0) and **offline Downloads** — the v1.6 feature currently being built.
+> 🔱 **This is an unofficial fork of Swiftfin for the iOS app.** It adds three things upstream doesn't ship: **Chromecast support** (v1.5.0), **offline Downloads** (v1.6.0), and a **VLCKit 4 media engine** replacing VLCUI (v2.0.0, alpha).
+> Downloads became **background transfers** in **v2.1.0** — they continue with the app suspended or in the background, and survive the phone changing network. Force-quitting the app cancels them, which is iOS's rule and not something an app can opt out of; the download starts again from the beginning on the next launch. Earlier releases download only while the app is open and in the foreground.
 > See **[FORK_README.md](./FORK_README.md)** for what this fork changes, why, and the important disclaimers (AI-assisted, personal use, not affiliated with Jellyfin).
 > The rest of this README below is the **original upstream Swiftfin README**, kept intact for attribution and reference.
 >

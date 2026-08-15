@@ -6,6 +6,7 @@
 // Copyright (c) 2026 Jellyfin & Jellyfin Contributors
 //
 
+import Combine
 import FactoryKit
 import Files
 import Foundation
@@ -22,10 +23,16 @@ class DownloadTask: NSObject, ObservableObject {
 
         case notEnoughStorage
 
+        // [Downloads fork] A background transfer reports failure as a message
+        // rather than an `Error`, because its state is written to disk.
+        case transferFailed(String)
+
         var localizedDescription: String {
             switch self {
             case .notEnoughStorage:
                 "Not enough storage"
+            case let .transferFailed(message):
+                message
             }
         }
     }
@@ -47,6 +54,12 @@ class DownloadTask: NSObject, ObservableObject {
     var state: State = .ready
 
     private var downloadTask: Task<Void, Never>?
+
+    // [Downloads fork] Kept alive while a background transfer mirrors its state
+    // onto this task. Not `private`: the subscription is set up in
+    // `DownloadTask+MediaTransfer.swift`, and Swift's `private` does not reach
+    // across files.
+    var transferObservation: AnyCancellable?
 
     let item: BaseItemDto
 
@@ -73,7 +86,29 @@ class DownloadTask: NSObject, ObservableObject {
 
             deleteRootFolder()
 
-            // TODO: Look at TaskGroup for parallel calls
+            // [Downloads fork] Metadata is written *first* now, where it used to
+            // come last. A background transfer can finish with this process dead,
+            // and `saveMetadata()` would then never run — leaving a multi-gigabyte
+            // file on disk with no `Item.json` beside it. That is the one file
+            // `parseDownloadItem` needs to list a download, so the media would be
+            // invisible in the app and undeletable from it.
+            //
+            // Writing it up front costs nothing and means whatever survives a kill
+            // is always interpretable. The artwork follows, being small and quick.
+            saveMetadata()
+
+            await downloadBackdropImage()
+            await downloadPrimaryImage()
+
+            // [Downloads fork] Hand the media itself to the background transfer
+            // layer where one exists. It reports progress and completion by
+            // driving `state` from its own queue, so there is nothing to await
+            // and nothing more to do here.
+            let handedOff = await MainActor.run { beginBackgroundMediaTransfer() }
+            if handedOff { return }
+
+            // Foreground fallback — the original path, still used anywhere no
+            // transfer layer is registered.
             do {
                 try await downloadMedia()
             } catch {
@@ -84,10 +119,6 @@ class DownloadTask: NSObject, ObservableObject {
                 }
                 return
             }
-            await downloadBackdropImage()
-            await downloadPrimaryImage()
-
-            saveMetadata()
 
             await MainActor.run {
                 self.state = .complete
