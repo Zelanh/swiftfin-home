@@ -17,6 +17,13 @@ extension ItemFields {
     static let MinimumFields: [ItemFields] = [
         .mediaSources,
         .parentID,
+        // [Downloads fork] The denominator of the download badge on season and
+        // series posters: `childCount` is a season's episodes, `recursiveItemCount`
+        // a series' episodes across every season. Both are optional fields that
+        // Jellyfin only fills in when asked, and both are a single integer, so the
+        // cost of asking everywhere is far less than the cost of a second query.
+        .childCount,
+        .recursiveItemCount,
     ]
 }
 
