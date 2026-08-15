@@ -73,6 +73,16 @@ protocol MediaTransferring: AnyObject {
 
     /// Current state of one transfer, or `nil` if the layer has never seen it.
     func state(for itemID: String) -> MediaTransferState?
+
+    /// The items with a transfer that has been asked for and has not yet reached
+    /// an end — deliberately readable from anywhere.
+    ///
+    /// `nonisolated` because its one caller, `DownloadManager.downloadedItems()`,
+    /// is not main-actor bound and reconciles synchronously. Implementations must
+    /// answer from the durable record rather than from live in-memory state, which
+    /// is also the more correct answer: a transfer that outlived the process still
+    /// counts as pending.
+    nonisolated var pendingTransferIDs: Set<String> { get }
 }
 
 // MARK: - MediaTransferRequest

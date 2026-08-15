@@ -93,6 +93,15 @@ final class TransferQueue: ObservableObject {
     /// Takes an array because a season is the real unit of work; see
     /// ``MediaTransferring/enqueue(_:)``.
     func enqueue(_ requests: [MediaTransferRequest]) {
+        // A finished, failed or cancelled record is history, not a claim on the
+        // item. Clear those out of the way before deduplicating, or asking for the
+        // same item a second time is swallowed silently and no transfer ever
+        // starts — which looks, from the app, like a download that ticks green and
+        // does nothing. In-flight records are left alone, so asking twice while a
+        // transfer is running is still the no-op it should be.
+        let requested = Set(requests.map(\.itemID))
+        records.removeAll { requested.contains($0.id) && $0.state.isTerminal }
+
         let known = Set(records.map(\.id))
         let new = requests
             .filter { !known.contains($0.itemID) }

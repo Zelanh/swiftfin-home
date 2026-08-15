@@ -46,6 +46,13 @@ final class BackgroundTransferService: NSObject {
 
     private var cancellables = Set<AnyCancellable>()
 
+    /// A second view of the queue file, for reads from outside the main actor.
+    ///
+    /// ``TransferQueue`` owns the authoritative store and is the only writer; this
+    /// one never writes. Two readers over one file is safe, and it is what lets
+    /// ``pendingTransferIDs`` stay `nonisolated`.
+    private let readOnlyStore = TransferStore()
+
     /// Handed over by the app delegate when iOS wakes the app to report that a
     /// background session has events to deliver, and called once they are all in.
     ///
@@ -256,6 +263,21 @@ extension BackgroundTransferService: MediaTransferring {
     func enqueue(_ requests: [MediaTransferRequest]) {
         queue.enqueue(requests)
         startPendingTransfers()
+    }
+
+    /// Read straight from disk rather than from ``queue``.
+    ///
+    /// Not laziness: this property is `nonisolated`, so the main-actor queue is out
+    /// of reach by construction. Disk is the right source anyway — the file is
+    /// written the moment a transfer is enqueued and on every terminal transition,
+    /// so it answers correctly even in a process that has just launched and has no
+    /// in-memory queue yet.
+    nonisolated var pendingTransferIDs: Set<String> {
+        Set(
+            readOnlyStore.load()
+                .filter { !$0.state.isTerminal }
+                .map(\.id)
+        )
     }
 
     func cancel(itemIDs: [String]) {

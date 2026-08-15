@@ -6,6 +6,7 @@
 // Copyright (c) 2026 Jellyfin & Jellyfin Contributors
 //
 
+import Combine
 import FactoryKit
 import Foundation
 
@@ -31,8 +32,25 @@ final class DownloadStatusStore: ObservableObject {
     @Published
     private(set) var downloadedIDs: Set<String> = []
 
+    private var cancellables = Set<AnyCancellable>()
+
     init() {
         refresh()
+
+        // A background transfer can finish with no download button on screen, or
+        // with the app not running at all, so the button-driven refreshes cannot
+        // be the only ones. Watching the transfer layer is what makes a download
+        // appear the moment it lands rather than at the next launch.
+        //
+        // Hopping through `Task { @MainActor }` because a Combine `sink` closure
+        // carries no isolation of its own, and `refresh()` is main-actor bound.
+        Container.shared.mediaTransferring()?.transferStates
+            .map { states in Set(states.filter { $0.value.isTerminal }.keys) }
+            .removeDuplicates()
+            .sink { [weak self] _ in
+                Task { @MainActor in self?.refresh() }
+            }
+            .store(in: &cancellables)
     }
 
     /// Reload the set of downloaded item IDs from disk. Cheap and infrequent —

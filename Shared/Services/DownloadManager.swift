@@ -115,10 +115,21 @@ class DownloadManager: ObservableObject {
             return []
         }
 
+        // [Downloads fork] "No media file" no longer means "abandoned". Metadata is
+        // now written before the media is fetched, and a background transfer can
+        // take minutes, so between those two points a perfectly healthy download
+        // looks exactly like a deleted one. Deleting it here destroyed the very
+        // `Item.json` the finished transfer needed to become visible.
+        let pendingTransfers = Container.shared.mediaTransferring()?.pendingTransferIDs ?? []
+
         return ids.compactMap { id in
             guard let task = parseDownloadItem(with: id) else { return nil }
             guard task.getMediaURL() != nil else {
-                task.deleteRootFolder()
+                // Still garbage-collect genuinely abandoned metadata — media
+                // deleted from Files or iPhone Storage, with nothing on its way.
+                if !pendingTransfers.contains(id) {
+                    task.deleteRootFolder()
+                }
                 return nil
             }
             return task
