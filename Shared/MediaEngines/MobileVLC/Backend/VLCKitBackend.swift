@@ -65,19 +65,6 @@ final class VLCKitBackend: NSObject, MediaEngineSession {
     /// has actually opened the media and published its track list.
     private var pendingConfiguration: MediaEngineConfiguration?
 
-    /// A resume position waiting for libVLC to be able to honour it.
-    ///
-    /// libVLC has no equivalent of `AVPlayerItem.status == .readyToPlay` — the
-    /// nearest thing is `isSeekable`, which is false until the input is actually
-    /// seekable. Holding the position here until then is the same step AVPlayer
-    /// takes when it waits for the item to be ready before seeking, and only then
-    /// plays.
-    private var pendingSeek: Duration?
-
-    /// Keeps the "not seekable yet" note to one line per load — the check that
-    /// emits it runs on every time change.
-    private var didLogSeekDeferral = false
-
     // MARK: Lifecycle
 
     /// - Parameter subtitleStyle: applied as engine-creation options, because
@@ -149,42 +136,15 @@ final class VLCKitBackend: NSObject, MediaEngineSession {
     // MARK: MediaEngineSession
 
     func load(_ configuration: MediaEngineConfiguration) {
-        // Left in on purpose: opening the media twice in quick succession is what
-        // made resuming an item sit there doing nothing, and the only way to see
-        // it from a sideloaded build is Pulse. Two of these within a second of
-        // each other means the duplicate load is back.
-        // `bounds` is the measurement, not decoration. libVLC sizes its video
-        // output from the drawable, and a `play()` issued while that view is
-        // still zero-sized has nowhere to render — which would explain a black
-        // screen with correct controls, why resizing the view (opening Info or
-        // Episodes) starts playback in stock Swiftfin, and why it behaves the
-        // same under VLCKit 3 and 4. Comparing this line between resuming and
-        // starting over is what confirms or kills that.
-        Logger.swiftfin().notice(
-            "engine load · start=\(configuration.startSeconds.seconds)s · bounds=\(drawableBoundsDescription)"
-        )
-
         didRequestStop = false
         didEmitTerminalState = false
         isAwaitingNewMedia = true
         pendingConfiguration = configuration
 
-        // A position left over from the medium being replaced would otherwise be
-        // applied to this one.
-        pendingSeek = nil
-        didLogSeekDeferral = false
-
         guard let media = VLCMedia(url: configuration.url) else {
             onStateChange?(.error)
             return
         }
-
-        // `:start-time` was tried here and made things worse, so it is not coming
-        // back without new evidence. libVLC reported `playing · at 0.0s` — it did
-        // not honour the option as a starting position — yet it did disturb the
-        // demuxer: scrubbing afterwards played one point in the file while the
-        // scrubber showed another. It also broke starting from the beginning,
-        // which had worked every time until then.
 
         for sidecar in configuration.sidecars {
             let slave = VLCMediaSlave(
@@ -352,52 +312,11 @@ final class VLCKitBackend: NSObject, MediaEngineSession {
         }
     }
 
-    /// The drawable's size, as libVLC would read it right now.
-    ///
-    /// Kept short because it goes in every load line, and rounded because the
-    /// question is only ever "zero or not".
-    private var drawableBoundsDescription: String {
-        let size = drawable.bounds().size
-        return "\(Int(size.width))x\(Int(size.height))"
-    }
-
-    /// Perform a deferred resume seek, once libVLC can actually honour one.
-    ///
-    /// Driven from the time-changed callback rather than a state change on
-    /// purpose: a time change is proof the demuxer is running and producing
-    /// timestamps, which is a stronger signal than `playing` — that arrives
-    /// before anything has been decoded, and seeking there is what wedged the
-    /// player.
-    ///
-    /// `isSeekable` is false for live streams, where a resume position is
-    /// meaningless anyway; the position is dropped rather than retried forever.
-    private func seekIfPending() {
-        guard let target = pendingSeek else { return }
-
-        guard player.isSeekable else {
-            // Once only: this runs on every time change, several times a second.
-            if !didLogSeekDeferral {
-                didLogSeekDeferral = true
-                Logger.swiftfin().notice("engine seek deferred · input not seekable yet")
-            }
-            return
-        }
-
-        pendingSeek = nil
-        setSeconds(target)
-        Logger.swiftfin().notice("engine seek applied · to \(target.seconds)s")
-    }
-
     /// Apply the parts of a configuration that need a live, opened media.
     ///
-    /// Track lists do not exist until the engine has parsed the stream, so track
-    /// selection waits for the first `playing`.
-    ///
-    /// The resume position is *not* applied here, even though `playing` is where
-    /// it used to happen and where it is tempting to put it. Seeking at the very
-    /// instant playback begins is what left a resumed item on a black screen. It
-    /// is now deferred to ``seekIfPending()``, which waits for libVLC to say it
-    /// can actually seek.
+    /// Track lists do not exist until the engine has parsed the stream, and a
+    /// resume seek before that is discarded, so both wait for the first
+    /// `playing`.
     private func applyPendingConfiguration() {
         guard let configuration = pendingConfiguration else { return }
         pendingConfiguration = nil
@@ -409,7 +328,7 @@ final class VLCKitBackend: NSObject, MediaEngineSession {
         selectSubtitleTrack(at: configuration.subtitleTrackIndex)
 
         if configuration.startSeconds > .zero {
-            pendingSeek = configuration.startSeconds
+            setSeconds(configuration.startSeconds)
         }
 
         // Re-applied here as well as in `load`, through `setRate` so it gets the
@@ -445,7 +364,6 @@ extension VLCKitBackend: VLCMediaPlayerDelegate {
         Task { @MainActor [weak self] in
             guard let self else { return }
             self.reassertRateIfNeeded()
-            self.seekIfPending()
             self.onTimeChange?(self.currentPlaybackInfo())
         }
     }
@@ -468,16 +386,6 @@ extension VLCKitBackend: VLCMediaPlayerDelegate {
             // playback running is proof enough that the new medium is live.
             isAwaitingNewMedia = false
             applyPendingConfiguration()
-
-            // Tells apart the two ways `:start-time` can fail. Reading `player`
-            // is safe here and not in the callback itself: this runs after the
-            // hop to the main actor, by which point libVLC's lock is free.
-            //
-            // Reporting ~0 when a resume position was asked for means libVLC
-            // ignored the option, and the fix is the option, not the player.
-            Logger.swiftfin().notice(
-                "engine playing · at \(Double(player.time.intValue) / 1000)s · bounds=\(drawableBoundsDescription)"
-            )
             onStateChange?(.playing)
             // PiP renders its own transport controls from our media-controlling
             // answers; without this nudge they keep showing the previous state.

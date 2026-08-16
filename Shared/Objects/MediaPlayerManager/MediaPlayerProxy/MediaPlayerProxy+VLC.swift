@@ -155,20 +155,9 @@ extension VLCMediaPlayerProxy {
         var body: some View {
             if let playbackItem = manager.playbackItem, manager.state != .stopped {
                 enginePlayer.videoView
-                    // [MobileVLC4 fork] There is deliberately no `.onAppear` load
-                    // here, though there was.
-                    //
-                    // `manager.$playbackItem` is `@Published`, and a `@Published`
-                    // publisher hands its *current* value to every new subscriber.
-                    // So `onReceive` below already fires the moment this view
-                    // appears — an `onAppear` load on top of it opened the media
-                    // twice in a row, the second `player.media` assignment landing
-                    // while the first was still opening.
-                    //
-                    // That race is why resuming an item did nothing while "play
-                    // from the beginning" worked: starting over sets a new
-                    // `playbackItem` on a view that has already appeared, so only
-                    // one load runs.
+                    .onAppear {
+                        enginePlayer.load(engineConfiguration(for: playbackItem))
+                    }
                     .onChange(of: enginePlayer.playbackInfo) { _, info in
                         handle(info)
                     }
