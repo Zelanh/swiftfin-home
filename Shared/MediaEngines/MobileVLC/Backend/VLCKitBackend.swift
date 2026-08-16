@@ -154,6 +154,25 @@ final class VLCKitBackend: NSObject, MediaEngineSession {
             return
         }
 
+        // Resume by telling libVLC where to *open*, rather than opening at zero
+        // and seeking once it reports `playing`.
+        //
+        // The seek was the difference between resuming (black screen, no progress)
+        // and starting over (fine, every time), with everything else identical and
+        // exactly one load happening. A seek issued at the instant playback begins
+        // does not merely get dropped — if it did, the video would play from the
+        // start — it leaves the player wedged.
+        //
+        // `:start-time` is in seconds and is applied while the medium is opening,
+        // so the demuxer arrives already positioned and no seek is needed. It also
+        // saves opening at zero and throwing that work away.
+        //
+        // Jellyfin's playback URL carries no offset of its own — there is no
+        // `startTimeTicks` anywhere in the app — so this cannot double-count.
+        if configuration.startSeconds > .zero {
+            media.addOption(":start-time=\(configuration.startSeconds.seconds)")
+        }
+
         for sidecar in configuration.sidecars {
             let slave = VLCMediaSlave(
                 url: sidecar.url,
@@ -322,9 +341,13 @@ final class VLCKitBackend: NSObject, MediaEngineSession {
 
     /// Apply the parts of a configuration that need a live, opened media.
     ///
-    /// Track lists do not exist until the engine has parsed the stream, and a
-    /// resume seek before that is discarded, so both wait for the first
-    /// `playing`.
+    /// Track lists do not exist until the engine has parsed the stream, so track
+    /// selection waits for the first `playing`.
+    ///
+    /// The resume position deliberately does *not* happen here any more. It used
+    /// to, and seeking at the moment playback begins is what left a resumed item
+    /// on a black screen. It is now a `:start-time` option applied in `load`,
+    /// before the medium is opened — see there.
     private func applyPendingConfiguration() {
         guard let configuration = pendingConfiguration else { return }
         pendingConfiguration = nil
@@ -334,10 +357,6 @@ final class VLCKitBackend: NSObject, MediaEngineSession {
         }
 
         selectSubtitleTrack(at: configuration.subtitleTrackIndex)
-
-        if configuration.startSeconds > .zero {
-            setSeconds(configuration.startSeconds)
-        }
 
         // Re-applied here as well as in `load`, through `setRate` so it gets the
         // same re-assertion treatment: a rate set before playback begins is
@@ -394,6 +413,16 @@ extension VLCKitBackend: VLCMediaPlayerDelegate {
             // playback running is proof enough that the new medium is live.
             isAwaitingNewMedia = false
             applyPendingConfiguration()
+
+            // Tells apart the two ways `:start-time` can fail. Reading `player`
+            // is safe here and not in the callback itself: this runs after the
+            // hop to the main actor, by which point libVLC's lock is free.
+            //
+            // Reporting ~0 when a resume position was asked for means libVLC
+            // ignored the option, and the fix is the option, not the player.
+            Logger.swiftfin().notice(
+                "engine playing · at \(Double(player.time.intValue) / 1000)s"
+            )
             onStateChange?(.playing)
             // PiP renders its own transport controls from our media-controlling
             // answers; without this nudge they keep showing the previous state.
