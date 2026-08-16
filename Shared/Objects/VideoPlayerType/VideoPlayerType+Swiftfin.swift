@@ -76,6 +76,39 @@ extension VideoPlayerType {
             VideoCodec.wmv1
             VideoCodec.wmv2
             VideoCodec.wmv3
+        } containers: {
+
+            // [MobileVLC4 fork] EXPERIMENT — Matroska is deliberately absent.
+            //
+            // This profile had no `containers:` clause at all, and in Jellyfin an
+            // empty container list means "every container is fine". That is why
+            // everything reaches VLC as direct play: the server hands over the
+            // original file and the client has to walk it to reach a resume
+            // position, which on spinning disks took about two minutes for a
+            // ten-minute offset.
+            //
+            // Leaving `mkv` out asks Jellyfin to *remux* Matroska instead —
+            // repackaging into HLS segments while copying the video and audio
+            // streams untouched. That is cheap for the server (no re-encode) and
+            // it turns a resume into a segment lookup, which is the same thing
+            // that makes the native player feel instant.
+            //
+            // Forcing a transcode by lowering the bitrate already proved the
+            // playback side works. This isolates the container from the codecs:
+            // if remux also plays cleanly, then direct play is the whole problem
+            // and nothing is wrong with our seek at all.
+            //
+            // Revert by deleting this whole `containers:` clause.
+            MediaContainer.avi
+            MediaContainer.flv
+            MediaContainer.m4v
+            MediaContainer.mov
+            MediaContainer.mp4
+            MediaContainer.mpegts
+            MediaContainer.ts
+            MediaContainer.threeG2
+            MediaContainer.threeGP
+            MediaContainer.webm
         }
     }
 
