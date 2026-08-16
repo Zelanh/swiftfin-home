@@ -86,7 +86,6 @@ struct VideoPlayer: View {
         // [Chromecast fork] Cast session activation: swap the manager's proxy
         // to Cast, pause local VLC, and mirror the current item onto the
         // receiver. On end, restore VLC and resume near where Cast left off.
-        .backport
         .onChange(of: castManager.isSessionActive) { _, isActive in
             if isActive {
                 let newProxy = ChromecastMediaPlayerProxy()
@@ -113,21 +112,18 @@ struct VideoPlayer: View {
             }
         }
         #endif
-        .backport
-        .onChange(of: audioOffset) { _, newValue in
+        .onChange(of: audioOffset) {
             if let proxy = activeProxy as? MediaPlayerOffsetConfigurable { // [Chromecast fork] activeProxy
-                proxy.setAudioOffset(newValue)
+                proxy.setAudioOffset(audioOffset)
             }
         }
-        .backport
-        .onChange(of: containerState.isAspectFilled) { _, newValue in
+        .onChange(of: containerState.isAspectFilled) {
             UIView.animate(withDuration: 0.2) {
-                activeProxy.setAspectFill(newValue) // [Chromecast fork] activeProxy
+                activeProxy.setAspectFill(containerState.isAspectFilled) // [Chromecast fork] activeProxy
             }
         }
-        .backport
-        .onChange(of: containerState.isScrubbing) { _, newValue in
-            if newValue {
+        .onChange(of: containerState.isScrubbing) {
+            if containerState.isScrubbing {
                 scrubbingStartTime = CACurrentMediaTime()
             }
 
@@ -141,19 +137,17 @@ struct VideoPlayer: View {
             manager.seconds = scrubbedSeconds
             activeProxy.setSeconds(scrubbedSeconds) // [Chromecast fork] activeProxy
         }
-        .backport
-        .onChange(of: subtitleOffset) { _, newValue in
+        .onChange(of: subtitleOffset) {
             if let proxy = activeProxy as? MediaPlayerOffsetConfigurable { // [Chromecast fork] activeProxy
-                proxy.setSubtitleOffset(newValue)
+                proxy.setSubtitleOffset(subtitleOffset)
             }
         }
         .preference(
             key: PresentationControllerShouldDismissPreferenceKey.self,
             value: containerState.presentationControllerShouldDismiss
         )
-        .backport
-        .onChange(of: presentationCoordinator.isPresented) { _, isPresented in
-            guard !isPresented else { return }
+        .onChange(of: presentationCoordinator.isPresented) {
+            guard !presentationCoordinator.isPresented else { return }
             isBeingDismissedByTransition = true
 
             #if os(iOS)

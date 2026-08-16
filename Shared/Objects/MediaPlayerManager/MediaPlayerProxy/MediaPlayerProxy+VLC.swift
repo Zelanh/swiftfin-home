@@ -158,11 +158,9 @@ extension VLCMediaPlayerProxy {
                     .onAppear {
                         enginePlayer.load(engineConfiguration(for: playbackItem))
                     }
-                    .backport
                     .onChange(of: enginePlayer.playbackInfo) { _, info in
                         handle(info)
                     }
-                    .backport
                     .onChange(of: enginePlayer.state) { _, state in
                         handle(state)
                     }
@@ -170,13 +168,11 @@ extension VLCMediaPlayerProxy {
                         guard let playbackItem else { return }
                         enginePlayer.load(engineConfiguration(for: playbackItem))
                     }
-                    .backport
-                    .onChange(of: manager.rate) { _, newValue in
-                        enginePlayer.setRate(newValue)
+                    .onChange(of: manager.rate) {
+                        enginePlayer.setRate(manager.rate)
                     }
-                    .backport
-                    .onChange(of: subtitleConfiguration) { _, newValue in
-                        enginePlayer.setSubtitleStyle(newValue.asMediaEngineStyle)
+                    .onChange(of: subtitleConfiguration) {
+                        enginePlayer.setSubtitleStyle(subtitleConfiguration.asMediaEngineStyle)
                     }
             }
         }
