@@ -153,8 +153,15 @@ final class VLCKitBackend: NSObject, MediaEngineSession {
         // made resuming an item sit there doing nothing, and the only way to see
         // it from a sideloaded build is Pulse. Two of these within a second of
         // each other means the duplicate load is back.
+        // `bounds` is the measurement, not decoration. libVLC sizes its video
+        // output from the drawable, and a `play()` issued while that view is
+        // still zero-sized has nowhere to render — which would explain a black
+        // screen with correct controls, why resizing the view (opening Info or
+        // Episodes) starts playback in stock Swiftfin, and why it behaves the
+        // same under VLCKit 3 and 4. Comparing this line between resuming and
+        // starting over is what confirms or kills that.
         Logger.swiftfin().notice(
-            "engine load · start=\(configuration.startSeconds.seconds)s · autoPlay=\(configuration.autoPlay)"
+            "engine load · start=\(configuration.startSeconds.seconds)s · bounds=\(drawableBoundsDescription)"
         )
 
         didRequestStop = false
@@ -345,6 +352,15 @@ final class VLCKitBackend: NSObject, MediaEngineSession {
         }
     }
 
+    /// The drawable's size, as libVLC would read it right now.
+    ///
+    /// Kept short because it goes in every load line, and rounded because the
+    /// question is only ever "zero or not".
+    private var drawableBoundsDescription: String {
+        let size = drawable.bounds().size
+        return "\(Int(size.width))x\(Int(size.height))"
+    }
+
     /// Perform a deferred resume seek, once libVLC can actually honour one.
     ///
     /// Driven from the time-changed callback rather than a state change on
@@ -460,7 +476,7 @@ extension VLCKitBackend: VLCMediaPlayerDelegate {
             // Reporting ~0 when a resume position was asked for means libVLC
             // ignored the option, and the fix is the option, not the player.
             Logger.swiftfin().notice(
-                "engine playing · at \(Double(player.time.intValue) / 1000)s"
+                "engine playing · at \(Double(player.time.intValue) / 1000)s · bounds=\(drawableBoundsDescription)"
             )
             onStateChange?(.playing)
             // PiP renders its own transport controls from our media-controlling
