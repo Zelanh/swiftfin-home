@@ -141,7 +141,7 @@ extension VideoPlayer.PlaybackControls {
                 ),
                 currentProgress: currentProgress,
                 total: 100,
-                isScrollingEnabled: manager.playbackRequestStatus == .paused
+                isScrollingEnabled: manager.playbackRequestStatus == .paused && manager.state != .loadingItem
             )
             .onEditingChanged { isEditing in
                 if isEditing {
@@ -161,7 +161,6 @@ extension VideoPlayer.PlaybackControls {
             .frame(height: sliderHeight)
             .trackingSize($sliderSize)
             .foregroundStyle(manager.state == .loadingItem ? .gray : .primary)
-            .disabled(manager.state == .loadingItem)
         }
 
         @ViewBuilder
@@ -194,11 +193,11 @@ extension VideoPlayer.PlaybackControls {
             .overlay(alignment: .topLeading) {
                 previewImage
             }
-            .onChange(of: isFocused) { _, newValue in
-                containerState.isProgressBarFocused = newValue
+            .onChange(of: isFocused) {
+                containerState.isProgressBarFocused = isFocused
             }
-            .onChange(of: containerState.isProgressBarFocused) { _, newValue in
-                if newValue, !isFocused {
+            .onChange(of: containerState.isProgressBarFocused) {
+                if containerState.isProgressBarFocused, !isFocused {
                     isFocused = true
                 }
             }

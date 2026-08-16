@@ -57,6 +57,7 @@ extension VideoPlayer {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
             .edgePadding(.horizontal)
+            .focusSection()
             .animation(.easeInOut(duration: 0.25), value: containerState.isPresentingSupplement)
             .animation(.easeInOut(duration: 0.25), value: containerState.isPresentingOverlay)
             .animation(.linear(duration: 0.1), value: containerState.isScrubbing)
@@ -69,23 +70,19 @@ extension VideoPlayer {
             } message: {
                 Text(L10n.closePlayerWarning)
             }
-            .onFirstAppear {
-                containerState.isPresentingOverlay = true
+            .onChange(of: containerState.isPresentingOverlay) {
                 isPlaybackProgressFocused = true
             }
-            .onChange(of: containerState.isPresentingOverlay) { _, _ in
-                isPlaybackProgressFocused = true
-            }
-            .onChange(of: manager.playbackRequestStatus) { _, newValue in
-                if newValue == .paused, !containerState.isPresentingOverlay {
+            .onChange(of: manager.playbackRequestStatus) {
+                if manager.playbackRequestStatus == .paused, !containerState.isPresentingOverlay {
                     containerState.isPresentingOverlay = true
                 }
             }
             .onReceive(containerState.containerView?.onPressEvent ?? .init()) { press in
                 handlePressEvent(press)
             }
-            .onChange(of: containerState.isProgressBarFocused) { _, newValue in
-                if !newValue {
+            .onChange(of: containerState.isProgressBarFocused) {
+                if !containerState.isProgressBarFocused {
                     containerState.cancelScrub()
 
                     if isSpeedBoosting {

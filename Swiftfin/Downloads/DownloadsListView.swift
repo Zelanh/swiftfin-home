@@ -95,7 +95,6 @@ struct DownloadsListView: View {
             }
         }
         .navigationTitle(L10n.downloads)
-        .backport
         .toolbarTitleDisplayMode(.inline)
         .onAppear(perform: reload)
         .onReceive(tabItemSelected) { _ in reload() }
@@ -228,7 +227,6 @@ private struct ActiveDownloadRow: View {
         }
         .listRowInsets(EdgeInsets(top: 8, leading: 16, bottom: 8, trailing: 16))
         .listRowSeparator(.hidden)
-        .backport
         .onChange(of: isTerminal) { _, terminal in
             if terminal { onFinished() }
         }
