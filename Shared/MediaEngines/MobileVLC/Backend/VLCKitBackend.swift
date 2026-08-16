@@ -136,6 +136,14 @@ final class VLCKitBackend: NSObject, MediaEngineSession {
     // MARK: MediaEngineSession
 
     func load(_ configuration: MediaEngineConfiguration) {
+        // Left in on purpose: opening the media twice in quick succession is what
+        // made resuming an item sit there doing nothing, and the only way to see
+        // it from a sideloaded build is Pulse. Two of these within a second of
+        // each other means the duplicate load is back.
+        Logger.swiftfin().notice(
+            "engine load · start=\(configuration.startSeconds.seconds)s · autoPlay=\(configuration.autoPlay)"
+        )
+
         didRequestStop = false
         didEmitTerminalState = false
         isAwaitingNewMedia = true
