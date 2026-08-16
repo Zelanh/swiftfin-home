@@ -127,10 +127,60 @@ users. Skim these before assuming something is broken:
 - **No automated signing in CI.** The IPA artifact produced by GitHub
   Actions is **unsigned**. You re-sign it yourself with Sideloadly /
   3uTools / AltStore / Apple Developer cert.
-- **Periodically synced with upstream, not continuously.** v1.5.0 was
-  rebased onto a fresh upstream Swiftfin. It won't track upstream
-  automatically, but the isolated `Chromecast/` layout (see "Source
-  layout" below) is designed to make the next re-sync straightforward.
+- **Periodically synced with upstream, not continuously.** It won't track
+  upstream automatically; the isolated folder layout exists to keep each
+  re-sync cheap. Last synced against upstream of **2026-08-15** — see
+  "Keeping up with upstream" below.
+
+---
+
+## Keeping up with upstream
+
+The isolation rule this fork follows is not tidiness for its own sake — it is
+what makes a re-sync a morning's work instead of an archaeology project. The
+numbers from the 2026-08-15 sync, which are the argument for it:
+
+| | Files | |
+|---|---:|---|
+| Upstream changed, fork had not | 170 | copied straight over |
+| Upstream added / deleted | 14 / 5 | applied |
+| **Both changed** | **18** | of which **14 auto-merged** |
+| Needed a human | **4** | two Swift, two `.strings` |
+
+Upstream changed 188 files. Four needed thought.
+
+**The full inventory is measured, not remembered.** It lives outside the repo, at
+`inventario-divergencia-upstream.md`, because it describes the relationship
+between two trees rather than belonging to either — and so it survives a
+re-import. It is produced by diffing the pristine upstream against this tree, not
+derived from git history: history cannot answer the question here, since the
+initial import already contained modified files.
+
+Keep the pristine upstream of every sync under `Original/`, named ISO-style
+(`Swiftfin-main_2026-08-15`). That folder is the common ancestor every future
+three-way merge needs; without it, the next sync costs 30,000 lines instead of
+four files.
+
+### Two things the 2026-08-15 sync changed for us
+
+- **iOS deployment target 16.6 → 18.6**, upstream's decision. It is why several
+  `Backport` shims were deleted there — and four of this fork's call sites used
+  them (`.backport.onChange` ×3, `.backport.toolbarTitleDisplayMode` ×1). Both
+  are native at 18.6, so the fix was dropping `.backport`.
+- **Jellyfin SDK 2.1.0 → 3.0.0**, regenerated against the Jellyfin 12.0 spec. Of
+  the 118 endpoints Swiftfin calls, 5 are new and none is on the critical path —
+  three are the admin Server Backup screen, which would simply 404 against an
+  older server. Login, libraries, playback and downloads call exactly what they
+  called before, and Swiftfin checks the server version nowhere.
+
+### The trap worth knowing before the next one
+
+A clean auto-merge can still leave code that no longer compiles. Conflicts get
+reviewed; everything else gets trusted. In August, two `.backport.onChange` calls
+sat in a region of `MediaPlayerProxy+VLC.swift` that merged without complaint and
+so was never opened — against an API upstream had just deleted in a different
+file. **After merging, sweep the tree for calls to anything upstream removed**,
+rather than assuming the conflict list was the whole job.
 
 ---
 
