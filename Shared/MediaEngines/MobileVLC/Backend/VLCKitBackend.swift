@@ -65,6 +65,19 @@ final class VLCKitBackend: NSObject, MediaEngineSession {
     /// has actually opened the media and published its track list.
     private var pendingConfiguration: MediaEngineConfiguration?
 
+    /// A resume position waiting for libVLC to be able to honour it.
+    ///
+    /// libVLC has no equivalent of `AVPlayerItem.status == .readyToPlay` — the
+    /// nearest thing is `isSeekable`, which is false until the input is actually
+    /// seekable. Holding the position here until then is the same step AVPlayer
+    /// takes when it waits for the item to be ready before seeking, and only then
+    /// plays.
+    private var pendingSeek: Duration?
+
+    /// Keeps the "not seekable yet" note to one line per load — the check that
+    /// emits it runs on every time change.
+    private var didLogSeekDeferral = false
+
     // MARK: Lifecycle
 
     /// - Parameter subtitleStyle: applied as engine-creation options, because
@@ -149,29 +162,22 @@ final class VLCKitBackend: NSObject, MediaEngineSession {
         isAwaitingNewMedia = true
         pendingConfiguration = configuration
 
+        // A position left over from the medium being replaced would otherwise be
+        // applied to this one.
+        pendingSeek = nil
+        didLogSeekDeferral = false
+
         guard let media = VLCMedia(url: configuration.url) else {
             onStateChange?(.error)
             return
         }
 
-        // Resume by telling libVLC where to *open*, rather than opening at zero
-        // and seeking once it reports `playing`.
-        //
-        // The seek was the difference between resuming (black screen, no progress)
-        // and starting over (fine, every time), with everything else identical and
-        // exactly one load happening. A seek issued at the instant playback begins
-        // does not merely get dropped — if it did, the video would play from the
-        // start — it leaves the player wedged.
-        //
-        // `:start-time` is in seconds and is applied while the medium is opening,
-        // so the demuxer arrives already positioned and no seek is needed. It also
-        // saves opening at zero and throwing that work away.
-        //
-        // Jellyfin's playback URL carries no offset of its own — there is no
-        // `startTimeTicks` anywhere in the app — so this cannot double-count.
-        if configuration.startSeconds > .zero {
-            media.addOption(":start-time=\(configuration.startSeconds.seconds)")
-        }
+        // `:start-time` was tried here and made things worse, so it is not coming
+        // back without new evidence. libVLC reported `playing · at 0.0s` — it did
+        // not honour the option as a starting position — yet it did disturb the
+        // demuxer: scrubbing afterwards played one point in the file while the
+        // scrubber showed another. It also broke starting from the beginning,
+        // which had worked every time until then.
 
         for sidecar in configuration.sidecars {
             let slave = VLCMediaSlave(
@@ -339,15 +345,43 @@ final class VLCKitBackend: NSObject, MediaEngineSession {
         }
     }
 
+    /// Perform a deferred resume seek, once libVLC can actually honour one.
+    ///
+    /// Driven from the time-changed callback rather than a state change on
+    /// purpose: a time change is proof the demuxer is running and producing
+    /// timestamps, which is a stronger signal than `playing` — that arrives
+    /// before anything has been decoded, and seeking there is what wedged the
+    /// player.
+    ///
+    /// `isSeekable` is false for live streams, where a resume position is
+    /// meaningless anyway; the position is dropped rather than retried forever.
+    private func seekIfPending() {
+        guard let target = pendingSeek else { return }
+
+        guard player.isSeekable else {
+            // Once only: this runs on every time change, several times a second.
+            if !didLogSeekDeferral {
+                didLogSeekDeferral = true
+                Logger.swiftfin().notice("engine seek deferred · input not seekable yet")
+            }
+            return
+        }
+
+        pendingSeek = nil
+        setSeconds(target)
+        Logger.swiftfin().notice("engine seek applied · to \(target.seconds)s")
+    }
+
     /// Apply the parts of a configuration that need a live, opened media.
     ///
     /// Track lists do not exist until the engine has parsed the stream, so track
     /// selection waits for the first `playing`.
     ///
-    /// The resume position deliberately does *not* happen here any more. It used
-    /// to, and seeking at the moment playback begins is what left a resumed item
-    /// on a black screen. It is now a `:start-time` option applied in `load`,
-    /// before the medium is opened — see there.
+    /// The resume position is *not* applied here, even though `playing` is where
+    /// it used to happen and where it is tempting to put it. Seeking at the very
+    /// instant playback begins is what left a resumed item on a black screen. It
+    /// is now deferred to ``seekIfPending()``, which waits for libVLC to say it
+    /// can actually seek.
     private func applyPendingConfiguration() {
         guard let configuration = pendingConfiguration else { return }
         pendingConfiguration = nil
@@ -357,6 +391,10 @@ final class VLCKitBackend: NSObject, MediaEngineSession {
         }
 
         selectSubtitleTrack(at: configuration.subtitleTrackIndex)
+
+        if configuration.startSeconds > .zero {
+            pendingSeek = configuration.startSeconds
+        }
 
         // Re-applied here as well as in `load`, through `setRate` so it gets the
         // same re-assertion treatment: a rate set before playback begins is
@@ -391,6 +429,7 @@ extension VLCKitBackend: VLCMediaPlayerDelegate {
         Task { @MainActor [weak self] in
             guard let self else { return }
             self.reassertRateIfNeeded()
+            self.seekIfPending()
             self.onTimeChange?(self.currentPlaybackInfo())
         }
     }
