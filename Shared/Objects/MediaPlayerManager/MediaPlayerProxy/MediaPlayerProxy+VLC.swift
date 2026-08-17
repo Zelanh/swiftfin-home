@@ -186,7 +186,7 @@ extension VLCMediaPlayerProxy {
         }
 
         var body: some View {
-            if let playbackItem = manager.playbackItem, manager.state != .stopped {
+            if manager.playbackItem != nil, manager.state != .stopped {
                 enginePlayer.videoView
                     // [MobileVLC4 fork] There is deliberately no `.onAppear` load
                     // here, though there was one.

@@ -404,9 +404,11 @@ extension VLCKitBackend: VLCMediaPlayerDelegate {
                 self.didFirstTimeChange = true
                 let info = self.currentPlaybackInfo()
                 Logger.swiftfin().notice(
-                    "PLAY · first frames · at \(info.seconds.seconds)s · " +
-                        "video \(Int(info.videoSize.width))x\(Int(info.videoSize.height)) · " +
-                        "audio tracks \(info.audioTracks.count) · sub tracks \(info.subtitleTracks.count)"
+                    """
+                    PLAY · first frames · at \(info.seconds.seconds)s · \
+                    video \(Int(info.videoSize.width))x\(Int(info.videoSize.height)) · \
+                    audio tracks \(info.audioTracks.count) · sub tracks \(info.subtitleTracks.count)
+                    """
                 )
             }
 
@@ -428,9 +430,11 @@ extension VLCKitBackend: VLCMediaPlayerDelegate {
         // position and the drawable size at that instant, so a stall can be read
         // as "which state did it reach, and what did it have to draw on".
         Logger.swiftfin().notice(
-            "PLAY · state \(VLCMediaPlayerStateToString(newState)) · " +
-                "at \(Double(player.time.intValue) / 1000)s · " +
-                "seekable \(player.isSeekable) · bounds \(drawableSizeDescription)"
+            """
+            PLAY · state \(VLCMediaPlayerStateToString(newState)) · \
+            at \(Double(player.time.intValue) / 1000)s · \
+            seekable \(player.isSeekable) · bounds \(drawableSizeDescription)
+            """
         )
 
         switch newState {
