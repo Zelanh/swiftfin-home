@@ -127,28 +127,31 @@ extension VLCMediaPlayerProxy {
 
         /// Kept out of `body` deliberately. String interpolation inside a
         /// `ViewBuilder` closure is charged to the body's type-checking budget,
-        /// and these two lines were enough to blow it: *"the compiler is unable to
+        /// and two of these were enough to blow it: *"the compiler is unable to
         /// type-check this expression in reasonable time"*. Logging from a plain
         /// method costs the body nothing.
-        private var viewSizeDescription: String {
-            let bounds = enginePlayer.videoView.bounds
-            return "\(Int(bounds.width))x\(Int(bounds.height))"
-        }
-
+        ///
+        /// Note what is *not* here: the view's size. `MediaEnginePlayer.videoView`
+        /// is `some View`, the SwiftUI facade — not the `UIView` libVLC draws
+        /// into, which is the backend's and stays private to it. The size that
+        /// matters is the one libVLC reads, and the backend already reports it on
+        /// every `engine.load` and every state change.
+        ///
         /// The single entry point into the engine — one per playback, no more.
         private func logLoad(_ playbackItem: MediaPlayerItem) {
             Logger.swiftfin().notice(
-                "PLAY · view.onReceive → load · \(playbackItem.baseItem.displayTitle) · view \(viewSizeDescription)"
+                "PLAY · view.onReceive → load · \(playbackItem.baseItem.displayTitle)"
             )
         }
 
         /// Opening Info or Episodes shrinks the video to a strip, and for a long
         /// time that gesture was the only thing that got a stuck playback moving.
         /// This records what actually changes, so the coincidence can be told
-        /// apart from the cause.
+        /// apart from the cause — if no `engine.load` follows this line, the
+        /// resize was never what started playback.
         private func logSupplement(_ supplement: String?) {
             Logger.swiftfin().notice(
-                "PLAY · supplement \(supplement ?? "cerrado") · view \(viewSizeDescription) · engine \(enginePlayer.state)"
+                "PLAY · supplement \(supplement ?? "cerrado") · engine \(enginePlayer.state)"
             )
         }
 
