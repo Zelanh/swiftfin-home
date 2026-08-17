@@ -11,15 +11,18 @@ import JellyfinAPI
 
 extension DeviceProfile {
 
-    /// - Parameter isResuming: whether playback starts at a saved position rather
-    ///   than at zero. See the note at the end of this method for what it changes
-    ///   and why it is a property of *this* playback rather than of the device.
+    /// - Parameter shouldForceRemux: whether this playback should be served as a
+    ///   segmented stream even though the device could play the file directly.
+    ///   The caller decides, because it takes two facts this method cannot see:
+    ///   that playback starts at a saved position, and that the source codec is
+    ///   one the server can copy into HLS rather than re-encode. See the note at
+    ///   the end of this method, and `MediaPlayerItem.build`.
     static func build(
         for videoPlayer: VideoPlayerType,
         compatibilityMode: PlaybackCompatibility,
         maxBitrate: Int? = nil,
         maxResolution: PlaybackResolution = Defaults[.VideoPlayer.Playback.appMaximumResolution],
-        isResuming: Bool = false
+        shouldForceRemux: Bool = false
     ) -> DeviceProfile {
 
         var deviceProfile: DeviceProfile = .init()
@@ -89,7 +92,7 @@ extension DeviceProfile {
             deviceProfile.musicStreamingTranscodingBitrate = maxBitrate
         }
 
-        // MARK: - [MobileVLC4 fork] Resuming rules out direct play
+        // MARK: - [MobileVLC4 fork] Resuming a remuxable source rules out direct play
 
         // A direct-play stream is requested with `isStatic: true` — the raw file,
         // with no position parameter and no way to express one. Reaching minute
@@ -102,15 +105,18 @@ extension DeviceProfile {
         // *addressable* — a resume becomes "fetch segment 104" instead of "read
         // until you get there", which is exactly why the native player, whose
         // profile is narrow enough that Matroska never direct-plays, feels
-        // instant.
+        // instant. Measured on an mkv/hevc resumed at 30:49: 375 ms from the
+        // player appearing to frames on screen.
         //
-        // It is usually not even a transcode: the transcoding profile lists the
-        // common source codecs, so the server copies the streams into segments
-        // and only repackages. Cheap, and only when there is a position to reach.
+        // The bargain only holds when the server repackages instead of
+        // re-encoding, which is the caller's job to establish — the same trick
+        // on an avi/mpeg4 cost about thirty seconds, because HLS cannot carry
+        // MPEG-4 Part 2 and ffmpeg had to encode before there was a first
+        // segment to serve.
         //
         // Starting from zero is untouched and keeps direct play, which costs the
         // server nothing and is the majority of playbacks.
-        if isResuming {
+        if shouldForceRemux {
             deviceProfile.directPlayProfiles = []
         }
 

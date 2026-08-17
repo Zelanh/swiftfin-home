@@ -93,11 +93,36 @@ extension MediaPlayerItem {
             // keep direct play.
             let isResuming = (item.startSeconds ?? .zero) > .zero
 
+            // ...and whether the server can honour that by repackaging rather
+            // than re-encoding, which decides whether this is nearly free or
+            // very expensive. Two runs on 17-18 Aug 2026, same build, same
+            // code path, differing only in the source codec:
+            //
+            //   mkv · hevc · aac   → HLS copies the stream    →   0.375 s
+            //   avi · mpeg4 · mp3  → HLS cannot carry it,
+            //                        so ffmpeg re-encodes     →  ~30 s
+            //
+            // Jellyfin's `StreamBuilder` only copies video into HLS for a
+            // short list of codecs; for anything else, emptying the direct
+            // play profiles buys an addressable position at the price of a
+            // full transcode before the first segment exists. That trade is
+            // only worth making when the read it replaces is the slow one —
+            // and files in codecs HLS refuses are the old, small ones, where
+            // reading to the resume point costs almost nothing anyway.
+            //
+            // AV1 is deliberately absent: whether the server will copy it
+            // into HLS has not been measured here, and guessing wrong costs
+            // thirty seconds. Leaving it out keeps the previous behaviour.
+            let videoCodec = initialMediaSource.videoStreams?.first?.codec?.lowercased()
+            let isRemuxable = videoCodec == "h264" || videoCodec == "hevc"
+
+            let shouldForceRemux = isResuming && isRemuxable
+
             let built = DeviceProfile.build(
                 for: videoPlayerType,
                 compatibilityMode: compatibilityMode,
                 maxBitrate: maxBitrate,
-                isResuming: isResuming
+                shouldForceRemux: shouldForceRemux
             )
 
             // [MobileVLC4 fork] Temporary instrumentation, at `.notice` so Pulse
@@ -108,6 +133,7 @@ extension MediaPlayerItem {
                 PLAY · profile
                   player     \(videoPlayerType.rawValue) · mode \(compatibilityMode.rawValue)
                   position   \((item.startSeconds ?? .zero).seconds)s → isResuming \(isResuming)
+                  source     \(videoCodec ?? "?") → remuxable \(isRemuxable) → force \(shouldForceRemux)
                   directPlay \(built.directPlayProfiles?.count ?? 0) profiles
                   transcode  \(built.transcodingProfiles?.count ?? 0) profiles
                   maxBitrate \(maxBitrate / 1_000_000) Mbps
