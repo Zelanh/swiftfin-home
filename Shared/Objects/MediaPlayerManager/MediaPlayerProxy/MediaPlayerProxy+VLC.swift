@@ -123,6 +123,35 @@ extension VLCMediaPlayerProxy {
             containerState.isScrubbing
         }
 
+        // MARK: [MobileVLC4 fork] Temporary instrumentation
+
+        /// Kept out of `body` deliberately. String interpolation inside a
+        /// `ViewBuilder` closure is charged to the body's type-checking budget,
+        /// and these two lines were enough to blow it: *"the compiler is unable to
+        /// type-check this expression in reasonable time"*. Logging from a plain
+        /// method costs the body nothing.
+        private var viewSizeDescription: String {
+            let bounds = enginePlayer.videoView.bounds
+            return "\(Int(bounds.width))x\(Int(bounds.height))"
+        }
+
+        /// The single entry point into the engine — one per playback, no more.
+        private func logLoad(_ playbackItem: MediaPlayerItem) {
+            Logger.swiftfin().notice(
+                "PLAY · view.onReceive → load · \(playbackItem.baseItem.displayTitle) · view \(viewSizeDescription)"
+            )
+        }
+
+        /// Opening Info or Episodes shrinks the video to a strip, and for a long
+        /// time that gesture was the only thing that got a stuck playback moving.
+        /// This records what actually changes, so the coincidence can be told
+        /// apart from the cause.
+        private func logSupplement(_ supplement: String?) {
+            Logger.swiftfin().notice(
+                "PLAY · supplement \(supplement ?? "cerrado") · view \(viewSizeDescription) · engine \(enginePlayer.state)"
+            )
+        }
+
         private func engineConfiguration(for item: MediaPlayerItem) -> MediaEngineConfiguration {
             let baseItem = item.baseItem
             let mediaSource = item.mediaSource
@@ -179,29 +208,11 @@ extension VLCMediaPlayerProxy {
                     }
                     .onReceive(manager.$playbackItem) { playbackItem in
                         guard let playbackItem else { return }
-
-                        // [MobileVLC4 fork] Temporary. The single entry point into
-                        // the engine — one of these per playback, and no more.
-                        Logger.swiftfin().notice(
-                            "PLAY · view.onReceive → load · \(playbackItem.baseItem.displayTitle) · " +
-                                "view \(Int(enginePlayer.videoView.bounds.width))x" +
-                                "\(Int(enginePlayer.videoView.bounds.height))"
-                        )
-
+                        logLoad(playbackItem)
                         enginePlayer.load(engineConfiguration(for: playbackItem))
                     }
-                    // [MobileVLC4 fork] Temporary. Opening Info or Episodes shrinks
-                    // the video to a strip, and for a long time that gesture was
-                    // the only thing that got a stuck playback moving. This records
-                    // what actually changes when it happens, so the coincidence can
-                    // be told apart from the cause.
                     .onChange(of: containerState.selectedSupplement?.id) { _, supplement in
-                        Logger.swiftfin().notice(
-                            "PLAY · supplement \(supplement ?? "cerrado") · " +
-                                "view \(Int(enginePlayer.videoView.bounds.width))x" +
-                                "\(Int(enginePlayer.videoView.bounds.height)) · " +
-                                "engine \(String(describing: enginePlayer.state))"
-                        )
+                        logSupplement(supplement)
                     }
                     .onChange(of: manager.rate) {
                         enginePlayer.setRate(manager.rate)

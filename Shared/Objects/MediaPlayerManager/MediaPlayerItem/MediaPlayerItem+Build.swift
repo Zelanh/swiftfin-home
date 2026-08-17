@@ -110,7 +110,7 @@ extension MediaPlayerItem {
                   position   \((item.startSeconds ?? .zero).seconds)s → isResuming \(isResuming)
                   directPlay \(built.directPlayProfiles?.count ?? 0) profiles
                   transcode  \(built.transcodingProfiles?.count ?? 0) profiles
-                  maxBitrate \(maxBitrate.map { "\($0 / 1_000_000) Mbps" } ?? "sin límite")
+                  maxBitrate \(maxBitrate / 1_000_000) Mbps
                 """
             )
 
