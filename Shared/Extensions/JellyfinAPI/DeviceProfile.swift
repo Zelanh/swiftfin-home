@@ -11,11 +11,15 @@ import JellyfinAPI
 
 extension DeviceProfile {
 
+    /// - Parameter isResuming: whether playback starts at a saved position rather
+    ///   than at zero. See the note at the end of this method for what it changes
+    ///   and why it is a property of *this* playback rather than of the device.
     static func build(
         for videoPlayer: VideoPlayerType,
         compatibilityMode: PlaybackCompatibility,
         maxBitrate: Int? = nil,
-        maxResolution: PlaybackResolution = Defaults[.VideoPlayer.Playback.appMaximumResolution]
+        maxResolution: PlaybackResolution = Defaults[.VideoPlayer.Playback.appMaximumResolution],
+        isResuming: Bool = false
     ) -> DeviceProfile {
 
         var deviceProfile: DeviceProfile = .init()
@@ -83,6 +87,31 @@ extension DeviceProfile {
             deviceProfile.maxStaticBitrate = maxBitrate
             deviceProfile.maxStreamingBitrate = maxBitrate
             deviceProfile.musicStreamingTranscodingBitrate = maxBitrate
+        }
+
+        // MARK: - [MobileVLC4 fork] Resuming rules out direct play
+
+        // A direct-play stream is requested with `isStatic: true` — the raw file,
+        // with no position parameter and no way to express one. Reaching minute
+        // ten therefore means the client walking there itself, which on a
+        // multi-gigabyte file took about two minutes of black screen. This is not
+        // about Matroska: `isStatic` means a raw file whatever the container is.
+        //
+        // Emptying the direct-play list leaves the server no choice but to serve
+        // through the transcoding profile, which is HLS. That makes a position
+        // *addressable* — a resume becomes "fetch segment 104" instead of "read
+        // until you get there", which is exactly why the native player, whose
+        // profile is narrow enough that Matroska never direct-plays, feels
+        // instant.
+        //
+        // It is usually not even a transcode: the transcoding profile lists the
+        // common source codecs, so the server copies the streams into segments
+        // and only repackages. Cheap, and only when there is a position to reach.
+        //
+        // Starting from zero is untouched and keeps direct play, which costs the
+        // server nothing and is the majority of playbacks.
+        if isResuming {
+            deviceProfile.directPlayProfiles = []
         }
 
         return deviceProfile

@@ -80,10 +80,24 @@ extension MediaPlayerItem {
                 customDeviceProfile.musicStreamingTranscodingBitrate = maxBitrate
                 return customDeviceProfile
             }
+            // [MobileVLC4 fork] Whether this playback starts at a saved position.
+            //
+            // Read from `item`, which `getFullItem` refreshed above — that request
+            // carries a user id, so the response includes `userData`, and the
+            // resume position with it. It is therefore known here, well before the
+            // profile is decided and long before the stream is requested.
+            //
+            // `> .zero` and not `!= nil` on purpose: Jellyfin reports an unwatched
+            // item as position 0 rather than as no position at all, and it resets
+            // to 0 when something is finished. Both of those are fresh starts and
+            // keep direct play.
+            let isResuming = (item.startSeconds ?? .zero) > .zero
+
             return DeviceProfile.build(
                 for: videoPlayerType,
                 compatibilityMode: compatibilityMode,
-                maxBitrate: maxBitrate
+                maxBitrate: maxBitrate,
+                isResuming: isResuming
             )
         }()
 
