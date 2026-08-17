@@ -146,9 +146,18 @@ extension VLCMediaPlayerProxy {
 
         /// Opening Info or Episodes shrinks the video to a strip, and for a long
         /// time that gesture was the only thing that got a stuck playback moving.
-        /// This records what actually changes, so the coincidence can be told
-        /// apart from the cause — if no `engine.load` follows this line, the
-        /// resize was never what started playback.
+        ///
+        /// Read the first two traces backwards and the reason is plain: both
+        /// `engine.load`s reported `bounds 430x340`, the strip — so a supplement
+        /// was already open *before* the engine ever loaded. The gesture was
+        /// never resizing anything into working order; it was forcing the body
+        /// to re-evaluate, which is what created the view that carried the
+        /// subscription. Hence the shape above, where the subscription no longer
+        /// depends on the view existing.
+        ///
+        /// Now that this lives outside the branch it records openings too, so a
+        /// green run is one where `engine.load` arrives with no supplement line
+        /// before it at all.
         private func logSupplement(_ supplement: String?) {
             Logger.swiftfin().notice(
                 "PLAY · supplement \(supplement ?? "cerrado") · engine \(enginePlayer.state)"
@@ -186,43 +195,58 @@ extension VLCMediaPlayerProxy {
         }
 
         var body: some View {
-            if manager.playbackItem != nil, manager.state != .stopped {
-                enginePlayer.videoView
-                    // [MobileVLC4 fork] There is deliberately no `.onAppear` load
-                    // here, though there was one.
-                    //
-                    // `manager.$playbackItem` is `@Published`, and a `@Published`
-                    // publisher replays its current value to every new subscriber.
-                    // The `onReceive` below therefore fires the moment this view
-                    // appears — so an `onAppear` load on top of it opened the
-                    // medium twice, the second `player.media` assignment landing
-                    // while the first was still opening, and the engine settling
-                    // into a state where it never requested the stream at all.
-                    //
-                    // Measured, not inferred: with both in place the server logged
-                    // no request for fifty-six seconds after play was pressed, and
-                    // then started the moment the Info panel was opened — a
-                    // re-render producing one load that nothing raced.
-                    .onChange(of: enginePlayer.playbackInfo) { _, info in
-                        handle(info)
-                    }
-                    .onChange(of: enginePlayer.state) { _, state in
-                        handle(state)
-                    }
-                    .onReceive(manager.$playbackItem) { playbackItem in
-                        guard let playbackItem else { return }
-                        logLoad(playbackItem)
-                        enginePlayer.load(engineConfiguration(for: playbackItem))
-                    }
-                    .onChange(of: containerState.selectedSupplement?.id) { _, supplement in
-                        logSupplement(supplement)
-                    }
-                    .onChange(of: manager.rate) {
-                        enginePlayer.setRate(manager.rate)
-                    }
-                    .onChange(of: subtitleConfiguration) {
-                        enginePlayer.setSubtitleStyle(subtitleConfiguration.asMediaEngineStyle)
-                    }
+            // [MobileVLC4 fork] The `if` gates the *drawing surface*, never the
+            // subscription. That distinction is the whole bug this shape fixes.
+            //
+            // Both the load trigger and the supplement trace used to hang off
+            // `enginePlayer.videoView`, i.e. inside the branch. While the guard
+            // was false that view did not exist, so neither did its modifiers,
+            // so nothing was listening when the manager published `playbackItem`
+            // ninety milliseconds after play was pressed. The value arrived to an
+            // empty room.
+            //
+            // What eventually opened the guard was a re-render caused by some
+            // *other* dependency this view observes — `containerState` — which
+            // changes when a supplement is opened. That, and not the resize, is
+            // the entire mechanism behind "press Información and it plays":
+            // measured at 17.6 s once and about three minutes another time,
+            // both ending 0.2 s after the load finally fired.
+            //
+            // Subscribing from the ZStack instead means the listener exists from
+            // the first render, whether or not there is anything to draw yet.
+            ZStack {
+                if manager.playbackItem != nil, manager.state != .stopped {
+                    enginePlayer.videoView
+                }
+            }
+            // Everything below is behaviour, not drawing, so none of it belongs
+            // inside the branch. `onChange(of: enginePlayer.state)` is the second
+            // casualty of the old shape: while there was no surface, nobody
+            // relayed the engine's state back to the manager either.
+            .onChange(of: enginePlayer.playbackInfo) { _, info in
+                handle(info)
+            }
+            .onChange(of: enginePlayer.state) { _, state in
+                handle(state)
+            }
+            // Still no `.onAppear` load to pair with this, and still on purpose:
+            // `@Published` replays its current value to every new subscriber, so
+            // an `onAppear` alongside opened the medium twice — the second
+            // `player.media` assignment landing while the first was still
+            // opening, leaving the engine never requesting the stream at all.
+            .onReceive(manager.$playbackItem) { playbackItem in
+                guard let playbackItem else { return }
+                logLoad(playbackItem)
+                enginePlayer.load(engineConfiguration(for: playbackItem))
+            }
+            .onChange(of: containerState.selectedSupplement?.id) { _, supplement in
+                logSupplement(supplement)
+            }
+            .onChange(of: manager.rate) {
+                enginePlayer.setRate(manager.rate)
+            }
+            .onChange(of: subtitleConfiguration) {
+                enginePlayer.setSubtitleStyle(subtitleConfiguration.asMediaEngineStyle)
             }
         }
 
