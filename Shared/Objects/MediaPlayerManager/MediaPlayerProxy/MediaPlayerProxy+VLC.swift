@@ -6,6 +6,7 @@
 // Copyright (c) 2026 Jellyfin & Jellyfin Contributors
 //
 
+import Combine
 import Defaults
 import FactoryKit
 import Foundation
@@ -37,12 +38,90 @@ class VLCMediaPlayerProxy: VideoMediaPlayerProxy,
             for var o in observers {
                 o.manager = manager
             }
+
+            subscribeToPlaybackItem(of: manager)
         }
     }
 
     var observers: [any MediaPlayerObserver] = [
         NowPlayableObserver(),
     ]
+
+    // MARK: - [MobileVLC4 fork] Starting playback is the model's job
+
+    /// Replaced wholesale on every `manager` assignment, which drops the
+    /// previous subscription — one listener per manager, never two.
+    private var playbackItemCancellable: AnyCancellable?
+
+    /// Telling the engine what to open used to be a view's responsibility — an
+    /// `.onReceive` hanging off `enginePlayer.videoView`. That made playback
+    /// depend on SwiftUI having built and laid out a drawing surface, and when
+    /// it hadn't, the order was simply never given.
+    ///
+    /// Measured on 17 Aug 2026: the manager published `playbackItem` 105 ms
+    /// after play was pressed (`PLAY · profile` 22:13:25.515 → `Playing new
+    /// item` 22:13:25.620), and the view did not react for **92 seconds** —
+    /// until the user gave up and left, whose teardown produced the one layout
+    /// pass that built the view. Hence the load and the stop 45 ms apart in
+    /// that trace, and hence "press Información and it plays": that gesture was
+    /// only ever forcing a layout pass.
+    ///
+    /// `NowPlayableObserver` already listens to the same publisher this way.
+    /// The proxy owns `enginePlayer`, so the proxy is where this belongs.
+    ///
+    /// The manager arrives as a parameter rather than being read back off
+    /// `self`: isolation is not inherited by an extracted method, and the
+    /// property is a main-actor-isolated protocol requirement.
+    private func subscribeToPlaybackItem(of manager: MediaPlayerManager?) {
+        playbackItemCancellable = manager?.$playbackItem
+            .compactMap { $0 }
+            .sink { playbackItem in
+                // `MediaEnginePlayer` is `@MainActor`; the hop costs
+                // microseconds and keeps both language modes happy.
+                Task { @MainActor [weak self] in
+                    self?.load(playbackItem)
+                }
+            }
+    }
+
+    @MainActor
+    private func load(_ playbackItem: MediaPlayerItem) {
+        Logger.swiftfin().notice(
+            "PLAY · proxy.$playbackItem → load · \(playbackItem.baseItem.displayTitle)"
+        )
+
+        enginePlayer.load(engineConfiguration(for: playbackItem))
+    }
+
+    private func engineConfiguration(for item: MediaPlayerItem) -> MediaEngineConfiguration {
+        let baseItem = item.baseItem
+        let mediaSource = item.mediaSource
+
+        var configuration = MediaEngineConfiguration(url: item.url)
+        configuration.autoPlay = true
+
+        let startSeconds = max(.zero, (baseItem.startSeconds ?? .zero) - Duration.seconds(Defaults[.VideoPlayer.resumeOffset]))
+
+        if !baseItem.isLiveStream {
+            configuration.startSeconds = startSeconds
+
+            let subtitleIndex = item.indexMap.playerIndex(for: item.selectedSubtitleStreamIndex) ?? -1
+            configuration.subtitleTrackIndex = subtitleIndex < 0 ? nil : subtitleIndex
+
+            if mediaSource.transcodingURL == nil {
+                // A transcode carries one track, so only a direct play needs
+                // an explicit choice.
+                configuration.audioTrackIndex = item.indexMap.playerIndex(for: item.selectedAudioStreamIndex)
+            }
+        }
+
+        configuration.subtitleStyle = Defaults[.VideoPlayer.Subtitle.configuration].asMediaEngineStyle
+        configuration.rate = Defaults[.VideoPlayer.Playback.playbackRate]
+        configuration.sidecars = item.subtitleStreams.sidecarSubtitles
+            .compactMap(\.asMediaEngineSidecar)
+
+        return configuration
+    }
 
     func play() {
         enginePlayer.play()
@@ -137,10 +216,13 @@ extension VLCMediaPlayerProxy {
         /// matters is the one libVLC reads, and the backend already reports it on
         /// every `engine.load` and every state change.
         ///
-        /// The single entry point into the engine — one per playback, no more.
-        private func logLoad(_ playbackItem: MediaPlayerItem) {
+        /// The moment SwiftUI actually builds the drawing surface. Compare it
+        /// against `PLAY · proxy.$playbackItem → load`: the gap between them is
+        /// how long the picture lagged the audio, and it no longer gates
+        /// playback either way.
+        private func logSurfaceAppeared() {
             Logger.swiftfin().notice(
-                "PLAY · view.onReceive → load · \(playbackItem.baseItem.displayTitle)"
+                "PLAY · surface appeared · engine \(enginePlayer.state)"
             )
         }
 
@@ -162,36 +244,6 @@ extension VLCMediaPlayerProxy {
             Logger.swiftfin().notice(
                 "PLAY · supplement \(supplement ?? "cerrado") · engine \(enginePlayer.state)"
             )
-        }
-
-        private func engineConfiguration(for item: MediaPlayerItem) -> MediaEngineConfiguration {
-            let baseItem = item.baseItem
-            let mediaSource = item.mediaSource
-
-            var configuration = MediaEngineConfiguration(url: item.url)
-            configuration.autoPlay = true
-
-            let startSeconds = max(.zero, (baseItem.startSeconds ?? .zero) - Duration.seconds(Defaults[.VideoPlayer.resumeOffset]))
-
-            if !baseItem.isLiveStream {
-                configuration.startSeconds = startSeconds
-
-                let subtitleIndex = item.indexMap.playerIndex(for: item.selectedSubtitleStreamIndex) ?? -1
-                configuration.subtitleTrackIndex = subtitleIndex < 0 ? nil : subtitleIndex
-
-                if mediaSource.transcodingURL == nil {
-                    // A transcode carries one track, so only a direct play needs
-                    // an explicit choice.
-                    configuration.audioTrackIndex = item.indexMap.playerIndex(for: item.selectedAudioStreamIndex)
-                }
-            }
-
-            configuration.subtitleStyle = Defaults[.VideoPlayer.Subtitle.configuration].asMediaEngineStyle
-            configuration.rate = Defaults[.VideoPlayer.Playback.playbackRate]
-            configuration.sidecars = item.subtitleStreams.sidecarSubtitles
-                .compactMap(\.asMediaEngineSidecar)
-
-            return configuration
         }
 
         var body: some View {
@@ -229,15 +281,14 @@ extension VLCMediaPlayerProxy {
             .onChange(of: enginePlayer.state) { _, state in
                 handle(state)
             }
-            // Still no `.onAppear` load to pair with this, and still on purpose:
-            // `@Published` replays its current value to every new subscriber, so
-            // an `onAppear` alongside opened the medium twice — the second
-            // `player.media` assignment landing while the first was still
-            // opening, leaving the engine never requesting the stream at all.
-            .onReceive(manager.$playbackItem) { playbackItem in
-                guard let playbackItem else { return }
-                logLoad(playbackItem)
-                enginePlayer.load(engineConfiguration(for: playbackItem))
+            // The load no longer lives here at all — see
+            // `subscribeToPlaybackItem()` on the proxy. This only records when
+            // the surface finally exists, which is the number still unexplained:
+            // if it appears at t≈0 the view was fine all along and something
+            // else was swallowing the publish; if it appears late, playback is
+            // now already running by then and only the picture was waiting.
+            .onAppear {
+                logSurfaceAppeared()
             }
             .onChange(of: containerState.selectedSupplement?.id) { _, supplement in
                 logSupplement(supplement)
