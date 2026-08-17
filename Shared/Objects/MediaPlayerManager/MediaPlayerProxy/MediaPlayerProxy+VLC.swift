@@ -247,58 +247,54 @@ extension VLCMediaPlayerProxy {
         }
 
         var body: some View {
-            // [MobileVLC4 fork] The `if` gates the *drawing surface*, never the
-            // subscription. That distinction is the whole bug this shape fixes.
+            // [MobileVLC4 fork] Unconditional, and that is the fix.
             //
-            // Both the load trigger and the supplement trace used to hang off
-            // `enginePlayer.videoView`, i.e. inside the branch. While the guard
-            // was false that view did not exist, so neither did its modifiers,
-            // so nothing was listening when the manager published `playbackItem`
-            // ninety milliseconds after play was pressed. The value arrived to an
-            // empty room.
+            // This used to be wrapped in `if manager.playbackItem != nil,
+            // manager.state != .stopped`. The trace of 17 Aug 22:59 shows why
+            // that was fatal: `surface appeared` fired at 23.499, *before* the
+            // profile was even built, so the view existed while `playbackItem`
+            // was still nil — and the guard was therefore closed. SwiftUI never
+            // re-evaluated this body when the manager published the item at
+            // 23.894, so `videoView` never entered the hierarchy and the UIView
+            // libVLC draws into kept the frame it was born with: `bounds 0x0`.
             //
-            // What eventually opened the guard was a re-render caused by some
-            // *other* dependency this view observes — `containerState` — which
-            // changes when a supplement is opened. That, and not the resize, is
-            // the entire mechanism behind "press Información and it plays":
-            // measured at 17.6 s once and about three minutes another time,
-            // both ending 0.2 s after the load finally fired.
+            // Hence twenty seconds of audio with no picture, hence a single
+            // frame appearing on dismissal, hence the whole picture arriving at
+            // once on pressing Información. All three are the same event — a
+            // re-render caused by some *other* dependency this view observes —
+            // finally giving libVLC somewhere to paint. The engine had been
+            // playing correctly the entire time.
             //
-            // Subscribing from the ZStack instead means the listener exists from
-            // the first render, whether or not there is anything to draw yet.
-            ZStack {
-                if manager.playbackItem != nil, manager.state != .stopped {
-                    enginePlayer.videoView
+            // Why the manager's publish does not invalidate this body is still
+            // open, and no longer on the critical path: a video surface has no
+            // business asking anyone's permission to exist. An engine with
+            // nothing loaded draws black, which is what an idle player should
+            // look like anyway.
+            enginePlayer.videoView
+                .onChange(of: enginePlayer.playbackInfo) { _, info in
+                    handle(info)
                 }
-            }
-            // Everything below is behaviour, not drawing, so none of it belongs
-            // inside the branch. `onChange(of: enginePlayer.state)` is the second
-            // casualty of the old shape: while there was no surface, nobody
-            // relayed the engine's state back to the manager either.
-            .onChange(of: enginePlayer.playbackInfo) { _, info in
-                handle(info)
-            }
-            .onChange(of: enginePlayer.state) { _, state in
-                handle(state)
-            }
-            // The load no longer lives here at all — see
-            // `subscribeToPlaybackItem()` on the proxy. This only records when
-            // the surface finally exists, which is the number still unexplained:
-            // if it appears at t≈0 the view was fine all along and something
-            // else was swallowing the publish; if it appears late, playback is
-            // now already running by then and only the picture was waiting.
-            .onAppear {
-                logSurfaceAppeared()
-            }
-            .onChange(of: containerState.selectedSupplement?.id) { _, supplement in
-                logSupplement(supplement)
-            }
-            .onChange(of: manager.rate) {
-                enginePlayer.setRate(manager.rate)
-            }
-            .onChange(of: subtitleConfiguration) {
-                enginePlayer.setSubtitleStyle(subtitleConfiguration.asMediaEngineStyle)
-            }
+                .onChange(of: enginePlayer.state) { _, state in
+                    handle(state)
+                }
+                // The load no longer lives here at all — see
+                // `subscribeToPlaybackItem()` on the proxy. This only records when
+                // the surface finally exists, which is the number still unexplained:
+                // if it appears at t≈0 the view was fine all along and something
+                // else was swallowing the publish; if it appears late, playback is
+                // now already running by then and only the picture was waiting.
+                .onAppear {
+                    logSurfaceAppeared()
+                }
+                .onChange(of: containerState.selectedSupplement?.id) { _, supplement in
+                    logSupplement(supplement)
+                }
+                .onChange(of: manager.rate) {
+                    enginePlayer.setRate(manager.rate)
+                }
+                .onChange(of: subtitleConfiguration) {
+                    enginePlayer.setSubtitleStyle(subtitleConfiguration.asMediaEngineStyle)
+                }
         }
 
         private func handle(_ info: MediaEnginePlaybackInfo) {
