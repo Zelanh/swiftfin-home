@@ -93,12 +93,28 @@ extension MediaPlayerItem {
             // keep direct play.
             let isResuming = (item.startSeconds ?? .zero) > .zero
 
-            return DeviceProfile.build(
+            let built = DeviceProfile.build(
                 for: videoPlayerType,
                 compatibilityMode: compatibilityMode,
                 maxBitrate: maxBitrate,
                 isResuming: isResuming
             )
+
+            // [MobileVLC4 fork] Temporary instrumentation, at `.notice` so Pulse
+            // can be filtered to this trace alone. `directPlay 0` is what forces
+            // the server to remux, and is the whole point of `isResuming`.
+            Logger.swiftfin().notice(
+                """
+                PLAY · profile
+                  player     \(videoPlayerType.rawValue) · mode \(compatibilityMode.rawValue)
+                  position   \((item.startSeconds ?? .zero).seconds)s → isResuming \(isResuming)
+                  directPlay \(built.directPlayProfiles?.count ?? 0) profiles
+                  transcode  \(built.transcodingProfiles?.count ?? 0) profiles
+                  maxBitrate \(maxBitrate.map { "\($0 / 1_000_000) Mbps" } ?? "sin límite")
+                """
+            )
+
+            return built
         }()
 
         var playbackInfo = PlaybackInfoDto()
@@ -225,6 +241,20 @@ extension MediaPlayerItem {
         guard let itemID = item.id else {
             throw ErrorMessage("No item ID while building online media player item!")
         }
+
+        // [MobileVLC4 fork] Temporary. Which of the two branches the server's
+        // answer sends us down is the fact everything else follows from: an HLS
+        // playlist can be positioned by segment, a static file cannot be
+        // positioned at all.
+        logger.notice(
+            """
+            PLAY · stream
+              decision   \(mediaSource.transcodingURL != nil ? "HLS (remux/transcode)" : "direct play · fichero estático")
+              container  \(mediaSource.container ?? "?")
+              video      \(mediaSource.videoStreams?.first?.codec ?? "?")
+              audio      \(mediaSource.audioStreams?.first?.codec ?? "?")
+            """
+        )
 
         if let transcodingPath = mediaSource.transcodingURL {
             logger.trace("Using transcoding URL for item \(itemID)")

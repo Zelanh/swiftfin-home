@@ -10,6 +10,7 @@ import Defaults
 import FactoryKit
 import Foundation
 import JellyfinAPI
+import Logging
 import SwiftUI
 
 // [MobileVLC4 fork] Was VLCUI/MobileVLCKit 3; now drives MediaEnginePlayer,
@@ -155,9 +156,21 @@ extension VLCMediaPlayerProxy {
         var body: some View {
             if let playbackItem = manager.playbackItem, manager.state != .stopped {
                 enginePlayer.videoView
-                    .onAppear {
-                        enginePlayer.load(engineConfiguration(for: playbackItem))
-                    }
+                    // [MobileVLC4 fork] There is deliberately no `.onAppear` load
+                    // here, though there was one.
+                    //
+                    // `manager.$playbackItem` is `@Published`, and a `@Published`
+                    // publisher replays its current value to every new subscriber.
+                    // The `onReceive` below therefore fires the moment this view
+                    // appears — so an `onAppear` load on top of it opened the
+                    // medium twice, the second `player.media` assignment landing
+                    // while the first was still opening, and the engine settling
+                    // into a state where it never requested the stream at all.
+                    //
+                    // Measured, not inferred: with both in place the server logged
+                    // no request for fifty-six seconds after play was pressed, and
+                    // then started the moment the Info panel was opened — a
+                    // re-render producing one load that nothing raced.
                     .onChange(of: enginePlayer.playbackInfo) { _, info in
                         handle(info)
                     }
@@ -166,7 +179,29 @@ extension VLCMediaPlayerProxy {
                     }
                     .onReceive(manager.$playbackItem) { playbackItem in
                         guard let playbackItem else { return }
+
+                        // [MobileVLC4 fork] Temporary. The single entry point into
+                        // the engine — one of these per playback, and no more.
+                        Logger.swiftfin().notice(
+                            "PLAY · view.onReceive → load · \(playbackItem.baseItem.displayTitle) · " +
+                                "view \(Int(enginePlayer.videoView.bounds.width))x" +
+                                "\(Int(enginePlayer.videoView.bounds.height))"
+                        )
+
                         enginePlayer.load(engineConfiguration(for: playbackItem))
+                    }
+                    // [MobileVLC4 fork] Temporary. Opening Info or Episodes shrinks
+                    // the video to a strip, and for a long time that gesture was
+                    // the only thing that got a stuck playback moving. This records
+                    // what actually changes when it happens, so the coincidence can
+                    // be told apart from the cause.
+                    .onChange(of: containerState.selectedSupplement?.id) { _, supplement in
+                        Logger.swiftfin().notice(
+                            "PLAY · supplement \(supplement ?? "cerrado") · " +
+                                "view \(Int(enginePlayer.videoView.bounds.width))x" +
+                                "\(Int(enginePlayer.videoView.bounds.height)) · " +
+                                "engine \(String(describing: enginePlayer.state))"
+                        )
                     }
                     .onChange(of: manager.rate) {
                         enginePlayer.setRate(manager.rate)
