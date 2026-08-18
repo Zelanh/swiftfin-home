@@ -6,11 +6,20 @@
 # ChromeCastFramework.json.
 #
 # Pinned artifact (Carthage keys must be SemVer, so the alpha suffix lives here):
-#   VLCKit 4.0.0a22 — VLCKit-4.0-20260720-1538.zip
-#   sha256 d9de86d0c755cbcf46c49513ff57fffcd98258f0c7dd29f3e2d23bff3860da2a
+#   VLCKit-4.0-20260805-1123.zip — 5 Aug 2026, 916 146 006 bytes
 #   source: VLCKit master, Packaging/podspecs/VLCKit.podspec
+#
+# The SemVer key is 4.0.1 only to force Carthage to re-resolve. Carthage judges
+# `--cache-builds` validity by version, not by URL, and CI restores the Carthage
+# cache by key prefix — so leaving the key at 4.0.0 would have silently reused
+# the previous artifact and tested the wrong engine.
+#
+# No sha256 recorded: the artifact was not downloaded locally to compute one.
+# The previous pin was 4.0.0a22, VLCKit-4.0-20260720-1538.zip, sha256
+# d9de86d0c755cbcf46c49513ff57fffcd98258f0c7dd29f3e2d23bff3860da2a — revert to
+# that pair if this bump regresses.
 #
 # This is an alpha. Treat every bump as a small migration: rebuild, then re-run
 # the playback matrix on a real iPhone before accepting it.
-binary "VLCKit4.json" == 4.0.0
+binary "VLCKit4.json" == 4.0.1
 binary "ChromeCastFramework.json"
