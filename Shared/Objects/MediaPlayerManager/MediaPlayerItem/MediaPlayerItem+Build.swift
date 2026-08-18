@@ -80,11 +80,67 @@ extension MediaPlayerItem {
                 customDeviceProfile.musicStreamingTranscodingBitrate = maxBitrate
                 return customDeviceProfile
             }
-            return DeviceProfile.build(
+            // [MobileVLC4 fork] Whether this playback starts at a saved position.
+            //
+            // Read from `item`, which `getFullItem` refreshed above — that request
+            // carries a user id, so the response includes `userData`, and the
+            // resume position with it. It is therefore known here, well before the
+            // profile is decided and long before the stream is requested.
+            //
+            // `> .zero` and not `!= nil` on purpose: Jellyfin reports an unwatched
+            // item as position 0 rather than as no position at all, and it resets
+            // to 0 when something is finished. Both of those are fresh starts and
+            // keep direct play.
+            let isResuming = (item.startSeconds ?? .zero) > .zero
+
+            // ...and whether the server can honour that by repackaging rather
+            // than re-encoding, which decides whether this is nearly free or
+            // very expensive. Two runs on 17-18 Aug 2026, same build, same
+            // code path, differing only in the source codec:
+            //
+            //   mkv · hevc · aac   → HLS copies the stream    →   0.375 s
+            //   avi · mpeg4 · mp3  → HLS cannot carry it,
+            //                        so ffmpeg re-encodes     →  ~30 s
+            //
+            // Jellyfin's `StreamBuilder` only copies video into HLS for a
+            // short list of codecs; for anything else, emptying the direct
+            // play profiles buys an addressable position at the price of a
+            // full transcode before the first segment exists. That trade is
+            // only worth making when the read it replaces is the slow one —
+            // and files in codecs HLS refuses are the old, small ones, where
+            // reading to the resume point costs almost nothing anyway.
+            //
+            // AV1 is deliberately absent: whether the server will copy it
+            // into HLS has not been measured here, and guessing wrong costs
+            // thirty seconds. Leaving it out keeps the previous behaviour.
+            let videoCodec = initialMediaSource.videoStreams?.first?.codec?.lowercased()
+            let isRemuxable = videoCodec == "h264" || videoCodec == "hevc"
+
+            let shouldForceRemux = isResuming && isRemuxable
+
+            let built = DeviceProfile.build(
                 for: videoPlayerType,
                 compatibilityMode: compatibilityMode,
-                maxBitrate: maxBitrate
+                maxBitrate: maxBitrate,
+                shouldForceRemux: shouldForceRemux
             )
+
+            // [MobileVLC4 fork] Temporary instrumentation, at `.notice` so Pulse
+            // can be filtered to this trace alone. `directPlay 0` is what forces
+            // the server to remux, and is the whole point of `isResuming`.
+            Logger.swiftfin().notice(
+                """
+                PLAY · profile
+                  player     \(videoPlayerType.rawValue) · mode \(compatibilityMode.rawValue)
+                  position   \((item.startSeconds ?? .zero).seconds)s → isResuming \(isResuming)
+                  source     \(videoCodec ?? "?") → remuxable \(isRemuxable) → force \(shouldForceRemux)
+                  directPlay \(built.directPlayProfiles?.count ?? 0) profiles
+                  transcode  \(built.transcodingProfiles?.count ?? 0) profiles
+                  maxBitrate \(maxBitrate / 1_000_000) Mbps
+                """
+            )
+
+            return built
         }()
 
         var playbackInfo = PlaybackInfoDto()
@@ -211,6 +267,20 @@ extension MediaPlayerItem {
         guard let itemID = item.id else {
             throw ErrorMessage("No item ID while building online media player item!")
         }
+
+        // [MobileVLC4 fork] Temporary. Which of the two branches the server's
+        // answer sends us down is the fact everything else follows from: an HLS
+        // playlist can be positioned by segment, a static file cannot be
+        // positioned at all.
+        logger.notice(
+            """
+            PLAY · stream
+              decision   \(mediaSource.transcodingURL != nil ? "HLS (remux/transcode)" : "direct play · fichero estático")
+              container  \(mediaSource.container ?? "?")
+              video      \(mediaSource.videoStreams?.first?.codec ?? "?")
+              audio      \(mediaSource.audioStreams?.first?.codec ?? "?")
+            """
+        )
 
         if let transcodingPath = mediaSource.transcodingURL {
             logger.trace("Using transcoding URL for item \(itemID)")

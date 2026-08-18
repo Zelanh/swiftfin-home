@@ -207,10 +207,13 @@ struct ItemLibrary: PagingLibrary, SearchablePagingLibrary, WithRandomElementLib
         isLetterFilterIncluded: Bool = true
     ) -> Paths.GetItemsParameters {
         var parameters = parameters
+        parameters.audioLanguages = filters.audioLanguages.map(\.value)
         parameters.filters = filters.traits
         parameters.genres = filters.genres.map(\.value)
+        parameters.officialRatings = filters.officialRatings.map(\.value)
         parameters.sortBy = filters.sortBy
         parameters.sortOrder = filters.sortOrder
+        parameters.subtitleLanguages = filters.subtitleLanguages.map(\.value)
         parameters.tags = filters.tags.map(\.value)
         parameters.years = filters.years.compactMap { Int($0.value) }
 
@@ -285,9 +288,8 @@ private struct ItemLibraryBody<Content: View>: View {
                     await filterViewModel.getQueryFilters()
                 }
             }
-            .backport
-            .onChange(of: filterViewModel.currentFilters) { _, newFilters in
-                rememberSort(from: newFilters)
+            .onChange(of: filterViewModel.currentFilters) {
+                rememberSort(from: filterViewModel.currentFilters)
             }
             .onReceive(
                 filterViewModel.$currentFilters

@@ -123,7 +123,6 @@ struct UltimaPlayerView: View {
                 .onAppear {
                     player.load(configuration)
                 }
-                .backport
                 .onChange(of: player.playbackInfo) { _, info in
                     if !isScrubbing {
                         let seconds = Double(info.seconds.components.seconds)
@@ -149,7 +148,6 @@ struct UltimaPlayerView: View {
                     currentAudioIndex = info.audioTracks.first(where: \.isSelected)?.index
                     currentSubtitleIndex = info.subtitleTracks.first(where: \.isSelected)?.index
                 }
-                .backport
                 .onChange(of: player.state) { _, state in
                     switch state {
                     case .playing:

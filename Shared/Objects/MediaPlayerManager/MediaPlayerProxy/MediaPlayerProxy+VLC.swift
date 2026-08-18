@@ -6,10 +6,12 @@
 // Copyright (c) 2026 Jellyfin & Jellyfin Contributors
 //
 
+import Combine
 import Defaults
 import FactoryKit
 import Foundation
 import JellyfinAPI
+import Logging
 import SwiftUI
 
 // [MobileVLC4 fork] Was VLCUI/MobileVLCKit 3; now drives MediaEnginePlayer,
@@ -36,12 +38,90 @@ class VLCMediaPlayerProxy: VideoMediaPlayerProxy,
             for var o in observers {
                 o.manager = manager
             }
+
+            subscribeToPlaybackItem(of: manager)
         }
     }
 
     var observers: [any MediaPlayerObserver] = [
         NowPlayableObserver(),
     ]
+
+    // MARK: - [MobileVLC4 fork] Starting playback is the model's job
+
+    /// Replaced wholesale on every `manager` assignment, which drops the
+    /// previous subscription — one listener per manager, never two.
+    private var playbackItemCancellable: AnyCancellable?
+
+    /// Telling the engine what to open used to be a view's responsibility — an
+    /// `.onReceive` hanging off `enginePlayer.videoView`. That made playback
+    /// depend on SwiftUI having built and laid out a drawing surface, and when
+    /// it hadn't, the order was simply never given.
+    ///
+    /// Measured on 17 Aug 2026: the manager published `playbackItem` 105 ms
+    /// after play was pressed (`PLAY · profile` 22:13:25.515 → `Playing new
+    /// item` 22:13:25.620), and the view did not react for **92 seconds** —
+    /// until the user gave up and left, whose teardown produced the one layout
+    /// pass that built the view. Hence the load and the stop 45 ms apart in
+    /// that trace, and hence "press Información and it plays": that gesture was
+    /// only ever forcing a layout pass.
+    ///
+    /// `NowPlayableObserver` already listens to the same publisher this way.
+    /// The proxy owns `enginePlayer`, so the proxy is where this belongs.
+    ///
+    /// The manager arrives as a parameter rather than being read back off
+    /// `self`: isolation is not inherited by an extracted method, and the
+    /// property is a main-actor-isolated protocol requirement.
+    private func subscribeToPlaybackItem(of manager: MediaPlayerManager?) {
+        playbackItemCancellable = manager?.$playbackItem
+            .compactMap { $0 }
+            .sink { playbackItem in
+                // `MediaEnginePlayer` is `@MainActor`; the hop costs
+                // microseconds and keeps both language modes happy.
+                Task { @MainActor [weak self] in
+                    self?.load(playbackItem)
+                }
+            }
+    }
+
+    @MainActor
+    private func load(_ playbackItem: MediaPlayerItem) {
+        Logger.swiftfin().notice(
+            "PLAY · proxy.$playbackItem → load · \(playbackItem.baseItem.displayTitle)"
+        )
+
+        enginePlayer.load(engineConfiguration(for: playbackItem))
+    }
+
+    private func engineConfiguration(for item: MediaPlayerItem) -> MediaEngineConfiguration {
+        let baseItem = item.baseItem
+        let mediaSource = item.mediaSource
+
+        var configuration = MediaEngineConfiguration(url: item.url)
+        configuration.autoPlay = true
+
+        let startSeconds = max(.zero, (baseItem.startSeconds ?? .zero) - Duration.seconds(Defaults[.VideoPlayer.resumeOffset]))
+
+        if !baseItem.isLiveStream {
+            configuration.startSeconds = startSeconds
+
+            let subtitleIndex = item.indexMap.playerIndex(for: item.selectedSubtitleStreamIndex) ?? -1
+            configuration.subtitleTrackIndex = subtitleIndex < 0 ? nil : subtitleIndex
+
+            if mediaSource.transcodingURL == nil {
+                // A transcode carries one track, so only a direct play needs
+                // an explicit choice.
+                configuration.audioTrackIndex = item.indexMap.playerIndex(for: item.selectedAudioStreamIndex)
+            }
+        }
+
+        configuration.subtitleStyle = Defaults[.VideoPlayer.Subtitle.configuration].asMediaEngineStyle
+        configuration.rate = Defaults[.VideoPlayer.Playback.playbackRate]
+        configuration.sidecars = item.subtitleStreams.sidecarSubtitles
+            .compactMap(\.asMediaEngineSidecar)
+
+        return configuration
+    }
 
     func play() {
         enginePlayer.play()
@@ -122,63 +202,99 @@ extension VLCMediaPlayerProxy {
             containerState.isScrubbing
         }
 
-        private func engineConfiguration(for item: MediaPlayerItem) -> MediaEngineConfiguration {
-            let baseItem = item.baseItem
-            let mediaSource = item.mediaSource
+        // MARK: [MobileVLC4 fork] Temporary instrumentation
 
-            var configuration = MediaEngineConfiguration(url: item.url)
-            configuration.autoPlay = true
+        /// Kept out of `body` deliberately. String interpolation inside a
+        /// `ViewBuilder` closure is charged to the body's type-checking budget,
+        /// and two of these were enough to blow it: *"the compiler is unable to
+        /// type-check this expression in reasonable time"*. Logging from a plain
+        /// method costs the body nothing.
+        ///
+        /// Note what is *not* here: the view's size. `MediaEnginePlayer.videoView`
+        /// is `some View`, the SwiftUI facade — not the `UIView` libVLC draws
+        /// into, which is the backend's and stays private to it. The size that
+        /// matters is the one libVLC reads, and the backend already reports it on
+        /// every `engine.load` and every state change.
+        ///
+        /// The moment SwiftUI actually builds the drawing surface. Compare it
+        /// against `PLAY · proxy.$playbackItem → load`: the gap between them is
+        /// how long the picture lagged the audio, and it no longer gates
+        /// playback either way.
+        private func logSurfaceAppeared() {
+            Logger.swiftfin().notice(
+                "PLAY · surface appeared · engine \(enginePlayer.state)"
+            )
+        }
 
-            let startSeconds = max(.zero, (baseItem.startSeconds ?? .zero) - Duration.seconds(Defaults[.VideoPlayer.resumeOffset]))
-
-            if !baseItem.isLiveStream {
-                configuration.startSeconds = startSeconds
-
-                let subtitleIndex = item.indexMap.playerIndex(for: item.selectedSubtitleStreamIndex) ?? -1
-                configuration.subtitleTrackIndex = subtitleIndex < 0 ? nil : subtitleIndex
-
-                if mediaSource.transcodingURL == nil {
-                    // A transcode carries one track, so only a direct play needs
-                    // an explicit choice.
-                    configuration.audioTrackIndex = item.indexMap.playerIndex(for: item.selectedAudioStreamIndex)
-                }
-            }
-
-            configuration.subtitleStyle = Defaults[.VideoPlayer.Subtitle.configuration].asMediaEngineStyle
-            configuration.rate = Defaults[.VideoPlayer.Playback.playbackRate]
-            configuration.sidecars = item.subtitleStreams.sidecarSubtitles
-                .compactMap(\.asMediaEngineSidecar)
-
-            return configuration
+        /// Opening Info or Episodes shrinks the video to a strip, and for a long
+        /// time that gesture was the only thing that got a stuck playback moving.
+        ///
+        /// Read the first two traces backwards and the reason is plain: both
+        /// `engine.load`s reported `bounds 430x340`, the strip — so a supplement
+        /// was already open *before* the engine ever loaded. The gesture was
+        /// never resizing anything into working order; it was forcing the body
+        /// to re-evaluate, which is what created the view that carried the
+        /// subscription. Hence the shape above, where the subscription no longer
+        /// depends on the view existing.
+        ///
+        /// Now that this lives outside the branch it records openings too, so a
+        /// green run is one where `engine.load` arrives with no supplement line
+        /// before it at all.
+        private func logSupplement(_ supplement: String?) {
+            Logger.swiftfin().notice(
+                "PLAY · supplement \(supplement ?? "cerrado") · engine \(enginePlayer.state)"
+            )
         }
 
         var body: some View {
-            if let playbackItem = manager.playbackItem, manager.state != .stopped {
-                enginePlayer.videoView
-                    .onAppear {
-                        enginePlayer.load(engineConfiguration(for: playbackItem))
-                    }
-                    .backport
-                    .onChange(of: enginePlayer.playbackInfo) { _, info in
-                        handle(info)
-                    }
-                    .backport
-                    .onChange(of: enginePlayer.state) { _, state in
-                        handle(state)
-                    }
-                    .onReceive(manager.$playbackItem) { playbackItem in
-                        guard let playbackItem else { return }
-                        enginePlayer.load(engineConfiguration(for: playbackItem))
-                    }
-                    .backport
-                    .onChange(of: manager.rate) { _, newValue in
-                        enginePlayer.setRate(newValue)
-                    }
-                    .backport
-                    .onChange(of: subtitleConfiguration) { _, newValue in
-                        enginePlayer.setSubtitleStyle(newValue.asMediaEngineStyle)
-                    }
-            }
+            // [MobileVLC4 fork] Unconditional, and that is the fix.
+            //
+            // This used to be wrapped in `if manager.playbackItem != nil,
+            // manager.state != .stopped`. The trace of 17 Aug 22:59 shows why
+            // that was fatal: `surface appeared` fired at 23.499, *before* the
+            // profile was even built, so the view existed while `playbackItem`
+            // was still nil — and the guard was therefore closed. SwiftUI never
+            // re-evaluated this body when the manager published the item at
+            // 23.894, so `videoView` never entered the hierarchy and the UIView
+            // libVLC draws into kept the frame it was born with: `bounds 0x0`.
+            //
+            // Hence twenty seconds of audio with no picture, hence a single
+            // frame appearing on dismissal, hence the whole picture arriving at
+            // once on pressing Información. All three are the same event — a
+            // re-render caused by some *other* dependency this view observes —
+            // finally giving libVLC somewhere to paint. The engine had been
+            // playing correctly the entire time.
+            //
+            // Why the manager's publish does not invalidate this body is still
+            // open, and no longer on the critical path: a video surface has no
+            // business asking anyone's permission to exist. An engine with
+            // nothing loaded draws black, which is what an idle player should
+            // look like anyway.
+            enginePlayer.videoView
+                .onChange(of: enginePlayer.playbackInfo) { _, info in
+                    handle(info)
+                }
+                .onChange(of: enginePlayer.state) { _, state in
+                    handle(state)
+                }
+                // The load no longer lives here at all — see
+                // `subscribeToPlaybackItem()` on the proxy. This only records when
+                // the surface finally exists, which is the number still unexplained:
+                // if it appears at t≈0 the view was fine all along and something
+                // else was swallowing the publish; if it appears late, playback is
+                // now already running by then and only the picture was waiting.
+                .onAppear {
+                    logSurfaceAppeared()
+                }
+                .onChange(of: containerState.selectedSupplement?.id) { _, supplement in
+                    logSupplement(supplement)
+                }
+                .onChange(of: manager.rate) {
+                    enginePlayer.setRate(manager.rate)
+                }
+                .onChange(of: subtitleConfiguration) {
+                    enginePlayer.setSubtitleStyle(subtitleConfiguration.asMediaEngineStyle)
+                }
         }
 
         private func handle(_ info: MediaEnginePlaybackInfo) {

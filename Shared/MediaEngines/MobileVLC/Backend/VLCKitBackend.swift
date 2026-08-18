@@ -65,6 +65,17 @@ final class VLCKitBackend: NSObject, MediaEngineSession {
     /// has actually opened the media and published its track list.
     private var pendingConfiguration: MediaEngineConfiguration?
 
+    /// [MobileVLC4 fork] Temporary. Keeps the trace to the *first* time change of
+    /// each medium — the moment the demuxer starts producing timestamps, which is
+    /// the interesting one. They arrive several times a second afterwards.
+    private var didFirstTimeChange = false
+
+    /// [MobileVLC4 fork] Temporary. The drawable's size as libVLC would read it.
+    private var drawableSizeDescription: String {
+        let size = drawable.bounds().size
+        return "\(Int(size.width))x\(Int(size.height))"
+    }
+
     // MARK: Lifecycle
 
     /// - Parameter subtitleStyle: applied as engine-creation options, because
@@ -136,6 +147,28 @@ final class VLCKitBackend: NSObject, MediaEngineSession {
     // MARK: MediaEngineSession
 
     func load(_ configuration: MediaEngineConfiguration) {
+        // [MobileVLC4 fork] Temporary instrumentation. Everything below logs at
+        // `.notice`, which is unused elsewhere in the app, so filtering Pulse to
+        // that level shows this trace and nothing else. Remove once the playback
+        // start sequence is settled.
+        //
+        // Two of these lines within a second of each other means the medium is
+        // being opened twice — the fault that stopped the engine requesting the
+        // stream at all.
+        Logger.swiftfin().notice(
+            """
+            PLAY · engine.load
+              url    \(configuration.url.lastPathComponent)
+              scheme \(configuration.url.scheme ?? "?") · host \(configuration.url.host ?? "?")
+              start  \(configuration.startSeconds.seconds)s · autoPlay \(configuration.autoPlay)
+              tracks audio \(configuration.audioTrackIndex.map(String.init) ?? "auto") · \
+            subs \(configuration.subtitleTrackIndex.map(String.init) ?? "none") · \
+            sidecars \(configuration.sidecars.count)
+              bounds \(drawableSizeDescription)
+            """
+        )
+
+        didFirstTimeChange = false
         didRequestStop = false
         didEmitTerminalState = false
         isAwaitingNewMedia = true
@@ -363,6 +396,22 @@ extension VLCKitBackend: VLCMediaPlayerDelegate {
         // the snapshot is read fresh on the main actor anyway.
         Task { @MainActor [weak self] in
             guard let self else { return }
+
+            // [MobileVLC4 fork] Temporary, and only the first of each medium: this
+            // is the moment the demuxer starts producing timestamps, which is the
+            // real "playback has begun". `.playing` arrives before it.
+            if !self.didFirstTimeChange {
+                self.didFirstTimeChange = true
+                let info = self.currentPlaybackInfo()
+                Logger.swiftfin().notice(
+                    """
+                    PLAY · first frames · at \(info.seconds.seconds)s · \
+                    video \(Int(info.videoSize.width))x\(Int(info.videoSize.height)) · \
+                    audio tracks \(info.audioTracks.count) · sub tracks \(info.subtitleTracks.count)
+                    """
+                )
+            }
+
             self.reassertRateIfNeeded()
             self.onTimeChange?(self.currentPlaybackInfo())
         }
@@ -377,6 +426,17 @@ extension VLCKitBackend: VLCMediaPlayerDelegate {
     // MARK: Main-actor handlers
 
     private func handle(_ newState: VLCMediaPlayerState) {
+        // [MobileVLC4 fork] Temporary. Every transition libVLC reports, with the
+        // position and the drawable size at that instant, so a stall can be read
+        // as "which state did it reach, and what did it have to draw on".
+        Logger.swiftfin().notice(
+            """
+            PLAY · state \(VLCMediaPlayerStateToString(newState)) · \
+            at \(Double(player.time.intValue) / 1000)s · \
+            seekable \(player.isSeekable) · bounds \(drawableSizeDescription)
+            """
+        )
+
         switch newState {
         case .opening:
             isAwaitingNewMedia = false
